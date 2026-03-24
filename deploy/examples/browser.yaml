@@ -8,6 +8,9 @@ spec:
   # Profile UID — used as browser_id when registering with the controller
   profileUid: "default"
 
+  # Keep the browser pod running (default true). Set false to scale Deployment to 0; PVC is kept.
+  # running: false
+
   # Browser container image (optional, defaults to latest stable)
   # image: kamasalyamov/livellm-browser:2.0.1
 

@@ -208,6 +208,10 @@ func (r *BrowserReconciler) ensureService(ctx context.Context, browser *browserv
 func (r *BrowserReconciler) reconcileStatus(ctx context.Context, browser *browserv1.Browser) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
+	if !browserWorkloadWanted(browser) {
+		return r.reconcileStoppedStatus(ctx, browser)
+	}
+
 	// Find running pods by label
 	var podList corev1.PodList
 	if err := r.List(ctx, &podList,
@@ -274,6 +278,31 @@ func (r *BrowserReconciler) reconcileStatus(ctx context.Context, browser *browse
 		logger.Info("browser is running", "wsUrl", wsURL)
 	}
 
+	return ctrl.Result{RequeueAfter: requeueReady}, nil
+}
+
+// reconcileStoppedStatus updates status when spec.running is false (Deployment scaled to 0).
+func (r *BrowserReconciler) reconcileStoppedStatus(ctx context.Context, browser *browserv1.Browser) (ctrl.Result, error) {
+	msg := "Scaled to zero (spec.running=false)"
+	if browser.Status.Phase != browserv1.BrowserPhaseStopped ||
+		browser.Status.Message != msg ||
+		browser.Status.PodName != "" ||
+		browser.Status.PodIP != "" ||
+		browser.Status.CdpPort != 0 ||
+		browser.Status.WsEndpoint != "" ||
+		browser.Status.WsURL != "" {
+
+		browser.Status.Phase = browserv1.BrowserPhaseStopped
+		browser.Status.Message = msg
+		browser.Status.PodName = ""
+		browser.Status.PodIP = ""
+		browser.Status.CdpPort = 0
+		browser.Status.WsEndpoint = ""
+		browser.Status.WsURL = ""
+		if err := r.Status().Update(ctx, browser); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
 	return ctrl.Result{RequeueAfter: requeueReady}, nil
 }
 

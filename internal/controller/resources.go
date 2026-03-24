@@ -20,6 +20,11 @@ const (
 	defaultImage    = "kamasalyamov/livellm-browser:2.0.1"
 	defaultStorage  = "1Gi"
 	defaultShmSize  = "4Gi"
+
+	// Must match browser image Dockerfile (USER headless → UID/GID 1000).
+	// PVC mounts are often root:root without fsGroup; headless cannot mkdir profiles/default otherwise.
+	headlessUID int64 = 1000
+	headlessGID int64 = 1000
 )
 
 // labels returns the standard label set for all child resources.
@@ -37,6 +42,14 @@ func selectorLabels(name string) map[string]string {
 	return map[string]string{
 		"livellm.io/browser": name,
 	}
+}
+
+// browserWorkloadWanted is true when spec.running is nil or true; false when explicitly false.
+func browserWorkloadWanted(browser *browserv1.Browser) bool {
+	if browser.Spec.Running == nil {
+		return true
+	}
+	return *browser.Spec.Running
 }
 
 // ────────────────────────────────────────────────────────────
@@ -86,6 +99,9 @@ func applyDeploymentSpec(deploy *appsv1.Deployment, browser *browserv1.Browser, 
 	}
 
 	replicas := int32(1)
+	if !browserWorkloadWanted(browser) {
+		replicas = 0
+	}
 	lbls := labels(browser.Name)
 	sel := selectorLabels(browser.Name)
 
@@ -121,6 +137,11 @@ func applyDeploymentSpec(deploy *appsv1.Deployment, browser *browserv1.Browser, 
 		Template: corev1.PodTemplateSpec{
 			ObjectMeta: metav1.ObjectMeta{Labels: lbls},
 			Spec: corev1.PodSpec{
+				SecurityContext: &corev1.PodSecurityContext{
+					RunAsUser:  int64Ptr(headlessUID),
+					RunAsGroup: int64Ptr(headlessGID),
+					FSGroup:    int64Ptr(headlessGID),
+				},
 				Containers: []corev1.Container{
 					{
 						Name:  "browser",
@@ -220,6 +241,10 @@ func applyServiceSpec(svc *corev1.Service, browser *browserv1.Browser) {
 
 func resourcePtr(q resource.Quantity) *resource.Quantity {
 	return &q
+}
+
+func int64Ptr(v int64) *int64 {
+	return &v
 }
 
 // isPodReady returns true if all containers in the pod are ready.

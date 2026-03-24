@@ -10,6 +10,12 @@ type BrowserSpec struct {
 	// Defaults to the CR name if empty.
 	ProfileUID string `json:"profileUid"`
 
+	// Running controls whether the browser workload is up. When false, the Deployment is scaled to zero (PVC retained).
+	// When omitted, defaults to true.
+	// +kubebuilder:default=true
+	// +optional
+	Running *bool `json:"running,omitempty"`
+
 	// Image overrides the browser container image.
 	// If empty, the operator uses its configured default (DEFAULT_BROWSER_IMAGE env var).
 	// +optional
@@ -99,7 +105,7 @@ type ResourcesSpec struct {
 }
 
 // BrowserPhase describes the lifecycle phase of a Browser.
-// +kubebuilder:validation:Enum=Pending;Creating;Running;Failed
+// +kubebuilder:validation:Enum=Pending;Creating;Running;Failed;Stopped
 type BrowserPhase string
 
 const (
@@ -107,6 +113,7 @@ const (
 	BrowserPhaseCreating BrowserPhase = "Creating"
 	BrowserPhaseRunning  BrowserPhase = "Running"
 	BrowserPhaseFailed   BrowserPhase = "Failed"
+	BrowserPhaseStopped  BrowserPhase = "Stopped"
 )
 
 // BrowserStatus defines the observed state of a Browser.

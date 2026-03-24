@@ -156,6 +156,12 @@ spec:
                     description: Requests describes the minimum resources required.
                     type: object
                 type: object
+              running:
+                default: true
+                description: |-
+                  Running controls whether the browser workload is up. When false, the Deployment is scaled to zero (PVC retained).
+                  When omitted, defaults to true.
+                type: boolean
               shmSize:
                 default: 4Gi
                 description: ShmSize is the /dev/shm size for Chrome (e.g. "4Gi").
@@ -183,6 +189,7 @@ spec:
                 - Creating
                 - Running
                 - Failed
+                - Stopped
                 type: string
               podIP:
                 description: PodIP is the cluster IP of the running browser pod.
