@@ -1,0 +1,84 @@
+# Example: create a browser with the "default" profile
+apiVersion: livellm.io/v1alpha1
+kind: Browser
+metadata:
+  name: my-browser
+  namespace: default
+spec:
+  # Profile UID — used as browser_id when registering with the controller
+  profileUid: "default"
+
+  # Browser container image (optional, defaults to latest stable)
+  # image: kamasalyamov/livellm-browser:2.0.1
+
+  # PVC size for profile data
+  storage: "1Gi"
+
+  # /dev/shm size for Chrome
+  shmSize: "4Gi"
+
+  # Pod resource limits
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "2Gi"
+    limits:
+      cpu: "1"
+      memory: "4Gi"
+
+  # What happens to profile PVC when this Browser is deleted
+  reclaimPolicy: Retain
+
+  # Optional: HTTP proxy for the browser
+  # proxy:
+  #   server: "http://proxy:8080"
+  #   username: "user"
+  #   password: "pass"
+  #   bypass: "localhost,127.0.0.1"
+
+  # Optional: Chrome Web Store extension IDs to install at creation time
+  # extensions:
+  #   - "cjpalhdlnbpafiamejdnhcphjbkeiagm"   # uBlock Origin
+  #   - "padekgcemlokbadohgkifijomclgjgif"   # Proxy SwitchyOmega
+
+  # Optional: load cookies from a ConfigMap or Secret
+  # cookies:
+  #   configMapRef:
+  #     name: my-cookies
+  #     key: cookies.json
+  # -- or --
+  # cookies:
+  #   secretRef:
+  #     name: my-cookies-secret
+  #     key: cookies.json
+
+---
+# Example: browser with proxy, extensions, and cookies from a Secret
+apiVersion: livellm.io/v1alpha1
+kind: Browser
+metadata:
+  name: scraper-us
+  namespace: default
+  labels:
+    tier: scraping
+spec:
+  profileUid: "us-east-1"
+  storage: "2Gi"
+  proxy:
+    server: "http://us-proxy.example.com:8080"
+    username: "scraper"
+    password: "s3cret"
+  extensions:
+    - "cjpalhdlnbpafiamejdnhcphjbkeiagm"   # uBlock Origin
+  cookies:
+    secretRef:
+      name: scraper-us-cookies
+      key: cookies.json
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "2Gi"
+    limits:
+      cpu: "2"
+      memory: "6Gi"
+  reclaimPolicy: Delete

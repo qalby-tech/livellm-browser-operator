@@ -1,0 +1,195 @@
+# livellm-browser-operator
+
+Kubernetes operator that manages **livellm browser** instances via Custom Resources.
+
+Each `Browser` CR results in:
+- a **Deployment** (one Chrome pod per browser)
+- a **PVC** (persistent profile data)
+- a **Service** (launcher API access)
+
+The operator discovers the CDP WebSocket URL from the in-pod launcher and
+writes it to `Browser` status. To connect the **livellm controller**, create a
+`Controller` CR in the same namespace — it deploys the controller and registers
+running browsers via `POST /parser/browsers`.
+
+---
+
+## Architecture
+
+```
+ kubectl apply ──────► ┌────────────────────┐     ┌─────────────────────┐
+                        │   Browser CRD      │     │  Controller CRD     │
+                        └────────┬───────────┘     └──────────┬──────────┘
+                                 │ watch                      │ watch
+                        ┌────────▼────────────────────────────▼──────────┐
+                        │              Operator (this project)            │
+                        └──┬───────────────────────────────┬───────────────┘
+                           │                               │
+                ┌──────────▼────────┐            ┌─────────▼──────────┐
+                │ Browser Deployment│            │ Controller Deploy  │
+                │  (Chrome + API)   │            │  (Playwright API)  │
+                └───────────────────┘            └────────────────────┘
+```
+
+## Prerequisites
+
+- Go 1.22+
+- A Kubernetes cluster (kind, minikube, EKS, GKE, …)
+- `kubectl` configured for your cluster
+- Docker (for building images)
+
+## Quick Start
+
+```bash
+# 1. Install the CRD
+make install-crd
+
+# 2. Run the operator locally (for development)
+make run
+
+# 3. In another terminal — create a browser
+kubectl apply -f deploy/examples/browser.yaml
+
+# 4. Check status
+kubectl get browsers
+kubectl get br my-browser -o wide          # shows WS URL + Pod IP
+kubectl get br my-browser -o yaml          # full status
+```
+
+## Deploy to Cluster
+
+```bash
+# Build the operator image
+make docker-build IMG=myregistry/livellm-browser-operator:latest
+
+# Push it
+docker push myregistry/livellm-browser-operator:latest
+
+# Update deploy/operator.yaml with your image, then:
+make deploy
+```
+
+## Usage
+
+### Create a browser
+
+```yaml
+apiVersion: livellm.io/v1alpha1
+kind: Browser
+metadata:
+  name: my-browser
+spec:
+  profileUid: "default"
+  storage: "1Gi"
+  shmSize: "4Gi"
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "2Gi"
+    limits:
+      cpu: "1"
+      memory: "4Gi"
+  reclaimPolicy: Retain    # Retain | Delete
+```
+
+### With proxy
+
+```yaml
+apiVersion: livellm.io/v1alpha1
+kind: Browser
+metadata:
+  name: us-browser
+spec:
+  profileUid: "us-east"
+  proxy:
+    server: "http://proxy:8080"
+    username: "user"
+    password: "pass"
+```
+
+### Connecting the controller
+
+Deploy a `Controller` CR (same namespace as your browsers). The operator creates
+the controller workload and syncs each running browser’s `status.wsUrl` to
+`POST /parser/browsers`. See `deploy/examples/controller.yaml`.
+
+---
+
+## Development
+
+### Updating the CRD
+
+When you change types in `api/v1alpha1/browser_types.go`:
+
+```bash
+# 1. Regenerate DeepCopy + CRD manifest in one command
+make gen
+
+# This runs:
+#   controller-gen object paths="./api/..."        → zz_generated.deepcopy.go
+#   controller-gen crd paths="./api/..." ...       → deploy/crd.yaml
+
+# 2. Apply the updated CRD to your cluster
+make install-crd
+
+# 3. Rebuild the operator
+make build
+```
+
+### Individual generation targets
+
+```bash
+make generate    # DeepCopy only  →  api/v1alpha1/zz_generated.deepcopy.go
+make manifests   # CRD only       →  deploy/crd.yaml
+```
+
+### Build & test
+
+```bash
+make tidy        # go mod tidy
+make build       # compile to bin/operator
+make run         # run locally (no leader election)
+make vet         # go vet
+```
+
+### Makefile reference
+
+| Target           | Description                                      |
+|------------------|--------------------------------------------------|
+| `make build`     | Compile the operator binary                      |
+| `make run`       | Run locally with `--leader-elect=false`           |
+| `make gen`       | Regenerate DeepCopy + CRD (**run after editing types**) |
+| `make generate`  | Regenerate DeepCopy only                         |
+| `make manifests` | Regenerate CRD YAML only                         |
+| `make docker-build` | Build Docker image                            |
+| `make deploy`    | `kubectl apply -k deploy/`                       |
+| `make undeploy`  | `kubectl delete -k deploy/`                      |
+| `make install-crd` | Apply just the CRD                             |
+| `make tidy`      | `go mod tidy`                                    |
+
+---
+
+## Project Structure
+
+```
+├── main.go                              # Entry point
+├── api/v1alpha1/
+│   ├── browser_types.go                 # CRD Go types  ← edit this
+│   ├── groupversion_info.go             # GVK registration
+│   └── zz_generated.deepcopy.go         # generated — do not edit
+├── internal/controller/
+│   ├── browser_controller.go            # Reconciler
+│   └── resources.go                     # PVC / Deployment / Service builders
+├── deploy/
+│   ├── crd.yaml                         # generated CRD manifest
+│   ├── rbac.yaml                        # ServiceAccount + ClusterRole
+│   ├── operator.yaml                    # Operator Deployment
+│   ├── namespace.yaml                   # livellm-system namespace
+│   ├── kustomization.yaml               # kustomize entry point
+│   └── examples/
+│       └── browser.yaml                 # Sample Browser CRs
+├── Dockerfile                           # Multi-stage distroless build
+├── Makefile
+├── go.mod
+└── go.sum
+```

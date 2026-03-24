@@ -1,0 +1,44 @@
+# Example: deploy a controller that auto-registers all Browser CRs in the namespace
+apiVersion: livellm.io/v1alpha1
+kind: Controller
+metadata:
+  name: my-controller
+  namespace: default
+spec:
+  # Controller container image (optional, defaults to latest stable)
+  # image: kamasalyamov/livellm-controller:2.0.1
+
+  # Number of replicas
+  replicas: 1
+
+  # Pod resource limits
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "512Mi"
+    limits:
+      cpu: "500m"
+      memory: "1Gi"
+
+  # Optional: only register Browser CRs with these labels.
+  # If omitted, ALL Running browsers in the same namespace are registered.
+  # browserSelector:
+  #   tier: scraping
+
+---
+# Example: controller that only registers browsers with label tier=scraping
+apiVersion: livellm.io/v1alpha1
+kind: Controller
+metadata:
+  name: scraper-controller
+  namespace: default
+spec:
+  browserSelector:
+    tier: scraping
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "512Mi"
+    limits:
+      cpu: "1"
+      memory: "2Gi"

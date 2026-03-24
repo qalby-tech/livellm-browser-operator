@@ -1,0 +1,352 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.1
+  name: browsers.livellm.io
+spec:
+  group: livellm.io
+  names:
+    kind: Browser
+    listKind: BrowserList
+    plural: browsers
+    shortNames:
+    - br
+    singular: browser
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.profileUid
+      name: Profile
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.wsUrl
+      name: WS URL
+      priority: 1
+      type: string
+    - jsonPath: .status.podIP
+      name: Pod IP
+      priority: 1
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          Browser is the Schema for the browsers API.
+          Each Browser CR results in one browser pod with a persistent profile.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: BrowserSpec defines the desired state of a Browser instance.
+            properties:
+              cookies:
+                description: |-
+                  Cookies loads a JSON array of cookies from a ConfigMap or Secret
+                  and injects them into the browser at creation time.
+                properties:
+                  configMapRef:
+                    description: ConfigMapRef references a ConfigMap key containing
+                      a JSON array of cookies.
+                    properties:
+                      key:
+                        default: cookies.json
+                        description: Key within the resource. Defaults to "cookies.json".
+                        type: string
+                      name:
+                        description: Name of the ConfigMap or Secret.
+                        type: string
+                    required:
+                    - name
+                    type: object
+                  secretRef:
+                    description: SecretRef references a Secret key containing a JSON
+                      array of cookies.
+                    properties:
+                      key:
+                        default: cookies.json
+                        description: Key within the resource. Defaults to "cookies.json".
+                        type: string
+                      name:
+                        description: Name of the ConfigMap or Secret.
+                        type: string
+                    required:
+                    - name
+                    type: object
+                type: object
+              extensions:
+                description: |-
+                  Extensions is a list of Chrome Web Store extension IDs to install at creation time.
+                  The launcher downloads and injects them into the profile before Chrome starts.
+                items:
+                  type: string
+                type: array
+              image:
+                description: |-
+                  Image overrides the browser container image.
+                  If empty, the operator uses its configured default (DEFAULT_BROWSER_IMAGE env var).
+                type: string
+              profileUid:
+                description: |-
+                  ProfileUID is the unique profile identifier used as browser_id in the controller.
+                  Defaults to the CR name if empty.
+                type: string
+              proxy:
+                description: |-
+                  Proxy configures HTTP proxy for the browser.
+                  Only applied when profileUid != "default" (operator creates a new browser via launcher API).
+                properties:
+                  bypass:
+                    description: Bypass is a comma-separated list of hosts to bypass.
+                    type: string
+                  password:
+                    description: Password for proxy authentication.
+                    type: string
+                  server:
+                    description: Server is the proxy URL (e.g. http://proxy:8080).
+                    type: string
+                  username:
+                    description: Username for proxy authentication.
+                    type: string
+                required:
+                - server
+                type: object
+              reclaimPolicy:
+                default: Retain
+                description: |-
+                  ReclaimPolicy determines what happens to the PVC when the Browser CR is deleted.
+                  "Retain" (default) keeps profile data; "Delete" removes it.
+                enum:
+                - Retain
+                - Delete
+                type: string
+              resources:
+                description: Resources defines CPU/memory requests and limits for
+                  the browser pod.
+                properties:
+                  limits:
+                    additionalProperties:
+                      type: string
+                    description: Limits describes the maximum resources allowed.
+                    type: object
+                  requests:
+                    additionalProperties:
+                      type: string
+                    description: Requests describes the minimum resources required.
+                    type: object
+                type: object
+              shmSize:
+                default: 4Gi
+                description: ShmSize is the /dev/shm size for Chrome (e.g. "4Gi").
+                type: string
+              storage:
+                default: 1Gi
+                description: Storage is the PVC size for profile data (e.g. "1Gi").
+                type: string
+            required:
+            - profileUid
+            type: object
+          status:
+            description: BrowserStatus defines the observed state of a Browser.
+            properties:
+              cdpPort:
+                description: CdpPort is the CDP proxy port inside the pod.
+                type: integer
+              message:
+                description: Message is a human-readable status message.
+                type: string
+              phase:
+                description: Phase is the current lifecycle phase.
+                enum:
+                - Pending
+                - Creating
+                - Running
+                - Failed
+                type: string
+              podIP:
+                description: PodIP is the cluster IP of the running browser pod.
+                type: string
+              podName:
+                description: PodName is the name of the running browser pod.
+                type: string
+              wsEndpoint:
+                description: WsEndpoint is the WebSocket path (e.g. /devtools/browser/...).
+                type: string
+              wsUrl:
+                description: 'WsURL is the full CDP WebSocket URL: ws://<podIP>:<cdpPort><wsEndpoint>'
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.1
+  name: controllers.livellm.io
+spec:
+  group: livellm.io
+  names:
+    kind: Controller
+    listKind: ControllerList
+    plural: controllers
+    shortNames:
+    - bc
+    singular: controller
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.url
+      name: URL
+      type: string
+    - jsonPath: .status.registeredBrowserCount
+      name: Browsers
+      type: integer
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          Controller is the Schema for the controllers API.
+          Each Controller CR deploys a livellm-controller instance and auto-registers Browser CRs.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: ControllerSpec defines the desired state of a Controller
+              deployment.
+            properties:
+              browserSelector:
+                additionalProperties:
+                  type: string
+                description: |-
+                  BrowserSelector filters which Browser CRs to auto-register.
+                  Uses label matching on Browser CRs.
+                  If empty, all Running Browser CRs in the same namespace are registered.
+                type: object
+              image:
+                description: |-
+                  Image overrides the controller container image.
+                  If empty, the operator uses its configured default (DEFAULT_CONTROLLER_IMAGE env var).
+                type: string
+              replicas:
+                default: 1
+                description: Replicas is the number of controller pod replicas.
+                format: int32
+                type: integer
+              resources:
+                description: Resources defines CPU/memory requests and limits for
+                  the controller pod.
+                properties:
+                  limits:
+                    additionalProperties:
+                      type: string
+                    description: Limits describes the maximum resources allowed.
+                    type: object
+                  requests:
+                    additionalProperties:
+                      type: string
+                    description: Requests describes the minimum resources required.
+                    type: object
+                type: object
+            type: object
+          status:
+            description: ControllerStatus defines the observed state of a Controller.
+            properties:
+              message:
+                description: Message is a human-readable status message.
+                type: string
+              phase:
+                description: Phase is the current lifecycle phase.
+                enum:
+                - Pending
+                - Creating
+                - Running
+                - Failed
+                type: string
+              podName:
+                description: PodName is the name of a running controller pod.
+                type: string
+              registeredBrowserCount:
+                description: RegisteredBrowserCount is the number of registered browsers
+                  (for printer column).
+                type: integer
+              registeredBrowsers:
+                description: RegisteredBrowsers lists browsers currently registered
+                  with the controller.
+                items:
+                  description: RegisteredBrowser records a browser that has been registered
+                    with the controller.
+                  properties:
+                    name:
+                      description: Name is the Browser CR name.
+                      type: string
+                    profileUid:
+                      description: ProfileUID is the profile identifier used as browser_id.
+                      type: string
+                    wsUrl:
+                      description: WsURL is the CDP WebSocket URL registered with
+                        the controller.
+                      type: string
+                  required:
+                  - name
+                  - profileUid
+                  - wsUrl
+                  type: object
+                type: array
+              url:
+                description: URL is the in-cluster base URL for the controller API
+                  (e.g. http://name:8000/parser).
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

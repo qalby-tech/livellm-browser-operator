@@ -1,0 +1,113 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+env:
+  REGISTRY: docker.io
+  IMAGE_NAME: kamasalyamov/livellm-browser-operator
+  CHART_REPO: qalby-tech/livellm-browser-operator-chart
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Extract version from VERSION file
+        id: version
+        run: |
+          VERSION="$(tr -d '[:space:]' < VERSION)"
+          if [ -z "$VERSION" ]; then
+            echo "VERSION file is empty."
+            exit 1
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Extracted version: $VERSION"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.VERSION }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  update-chart:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout current repository code
+        uses: actions/checkout@v4
+
+      - name: Extract version from VERSION file
+        id: version
+        run: |
+          VERSION="$(tr -d '[:space:]' < VERSION)"
+          if [ -z "$VERSION" ]; then
+            echo "VERSION file is empty."
+            exit 1
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Extracted version: $VERSION"
+
+      - name: Checkout chart repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.CHART_REPO }}
+          token: ${{ secrets.CHART_REPO_TOKEN }}
+          path: chart-repo
+
+      - name: Update Chart.yaml version field
+        id: update-chart
+        working-directory: chart-repo
+        run: |
+          APP_VERSION="${{ steps.version.outputs.VERSION }}"
+          CURRENT_VERSION="$(sed -n 's/^version:[[:space:]]*"\{0,1\}\(.*\)"\{0,1\}$/\1/p' Chart.yaml)"
+
+          if [ "$APP_VERSION" = "$CURRENT_VERSION" ]; then
+            echo "Chart version unchanged. Skipping chart update."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          sed -i "s/^version:.*/version: \"$APP_VERSION\"/" Chart.yaml
+
+          echo "Updated Chart.yaml:"
+          cat Chart.yaml
+          echo "updated_version=$APP_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Commit and push changes
+        if: steps.update-chart.outputs.skip != 'true'
+        working-directory: chart-repo
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Chart.yaml
+          git commit -m "chore(chart): release ${{ steps.version.outputs.VERSION }}"
+          git push origin main

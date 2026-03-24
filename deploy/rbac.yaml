@@ -1,0 +1,80 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: livellm-operator
+  namespace: livellm-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: livellm-operator
+rules:
+  # Browser CRD access
+  - apiGroups: ["livellm.io"]
+    resources: ["browsers"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["livellm.io"]
+    resources: ["browsers/status"]
+    verbs: ["get", "update", "patch"]
+  - apiGroups: ["livellm.io"]
+    resources: ["browsers/finalizers"]
+    verbs: ["update"]
+
+  # Controller CRD access
+  - apiGroups: ["livellm.io"]
+    resources: ["controllers"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["livellm.io"]
+    resources: ["controllers/status"]
+    verbs: ["get", "update", "patch"]
+  - apiGroups: ["livellm.io"]
+    resources: ["controllers/finalizers"]
+    verbs: ["update"]
+
+  # Pod management (for listing/checking status)
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+
+  # Deployment management (owned by Browser/Controller CRs)
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  # Service management (owned by Browser/Controller CRs)
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  # PVC management (not owned — separate lifecycle)
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+
+  # ConfigMap + Secret read access (for cookies injection)
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets"]
+    verbs: ["get", "list", "watch"]
+
+  # Events
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+
+  # Leader election
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: livellm-operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: livellm-operator
+subjects:
+  - kind: ServiceAccount
+    name: livellm-operator
+    namespace: livellm-system
