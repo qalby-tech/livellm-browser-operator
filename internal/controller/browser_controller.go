@@ -43,6 +43,13 @@ type launcherBrowser struct {
 	ProfilePath *string `json:"profile_path"`
 }
 
+type extensionInfo struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Version string `json:"version"`
+	Enabled bool   `json:"enabled"`
+}
+
 type createBrowserRequest struct {
 	ProfileUID string                   `json:"profile_uid,omitempty"`
 	Proxy      map[string]interface{}   `json:"proxy,omitempty"`
@@ -273,6 +280,9 @@ func (r *BrowserReconciler) reconcileStatus(ctx context.Context, browser *browse
 		browser.Status.Message = "Browser is ready"
 
 		if err := r.Status().Update(ctx, browser); err != nil {
+			if apierrors.IsConflict(err) {
+				return ctrl.Result{Requeue: true}, nil
+			}
 			return ctrl.Result{}, err
 		}
 		logger.Info("browser is running", "wsUrl", wsURL)
@@ -300,6 +310,9 @@ func (r *BrowserReconciler) reconcileStoppedStatus(ctx context.Context, browser 
 		browser.Status.WsEndpoint = ""
 		browser.Status.WsURL = ""
 		if err := r.Status().Update(ctx, browser); err != nil {
+			if apierrors.IsConflict(err) {
+				return ctrl.Result{Requeue: true}, nil
+			}
 			return ctrl.Result{}, err
 		}
 	}
@@ -318,6 +331,9 @@ func (r *BrowserReconciler) setStatus(
 		browser.Status.Phase = phase
 		browser.Status.Message = message
 		if err := r.Status().Update(ctx, browser); err != nil {
+			if apierrors.IsConflict(err) {
+				return ctrl.Result{Requeue: true}, nil
+			}
 			return ctrl.Result{}, err
 		}
 	}
@@ -350,7 +366,7 @@ func (r *BrowserReconciler) discoverBrowser(
 	// Look for exact match
 	for i := range browsers {
 		if browsers[i].BrowserID == profileUID {
-			return &browsers[i], nil
+			return r.syncExtensionsIfNeeded(ctx, baseURL, &browsers[i], extensions)
 		}
 	}
 
@@ -358,7 +374,7 @@ func (r *BrowserReconciler) discoverBrowser(
 	// If it doesn't, the launcher hasn't finished starting yet.
 	if profileUID == "default" {
 		if len(browsers) > 0 {
-			return &browsers[0], nil
+			return r.syncExtensionsIfNeeded(ctx, baseURL, &browsers[0], extensions)
 		}
 		return nil, fmt.Errorf("default browser not yet available")
 	}
@@ -496,4 +512,115 @@ func (r *BrowserReconciler) readCookies(ctx context.Context, browser *browserv1.
 		return nil, fmt.Errorf("parse cookies JSON: %w", err)
 	}
 	return cookies, nil
+}
+
+// ────────────────────────────────────────────────────────────
+// Extension sync helpers
+// ────────────────────────────────────────────────────────────
+
+// syncExtensionsIfNeeded checks whether the desired extensions are installed on
+// the browser and, if any are missing, calls the launcher to inject them and
+// restart the browser. It is safe to call on every reconcile – it is a no-op
+// when extensions already match.
+func (r *BrowserReconciler) syncExtensionsIfNeeded(
+	ctx context.Context,
+	baseURL string,
+	browser *launcherBrowser,
+	desiredExtensions []string,
+) (*launcherBrowser, error) {
+	if len(desiredExtensions) == 0 {
+		return browser, nil
+	}
+
+	installed, err := r.getInstalledExtensions(ctx, baseURL, browser.BrowserID)
+	if err != nil {
+		// Non-fatal: launcher may not have finished starting, just return current info.
+		return browser, nil
+	}
+
+	installedSet := make(map[string]bool, len(installed))
+	for _, e := range installed {
+		installedSet[e.ID] = true
+	}
+
+	var missing []string
+	for _, id := range desiredExtensions {
+		if !installedSet[id] {
+			missing = append(missing, id)
+		}
+	}
+
+	if len(missing) == 0 {
+		return browser, nil
+	}
+
+	// Install missing extensions. This restarts the browser inside the pod.
+	// Use a longer context so the restart can complete within the timeout.
+	updated, err := r.addExtensions(ctx, baseURL, browser.BrowserID, missing)
+	if err != nil {
+		// Non-fatal: log via caller, return old info so status is still updated.
+		return browser, fmt.Errorf("add extensions: %w", err)
+	}
+	return updated, nil
+}
+
+// getInstalledExtensions queries GET /browsers/{id}/extensions on the launcher.
+func (r *BrowserReconciler) getInstalledExtensions(ctx context.Context, baseURL, browserID string) ([]extensionInfo, error) {
+	url := fmt.Sprintf("%s/browsers/%s/extensions", baseURL, browserID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := r.HTTPClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("get extensions returned %d: %s", resp.StatusCode, string(body))
+	}
+
+	var exts []extensionInfo
+	if err := json.NewDecoder(resp.Body).Decode(&exts); err != nil {
+		return nil, fmt.Errorf("decode extensions response: %w", err)
+	}
+	return exts, nil
+}
+
+// addExtensions calls POST /browsers/{id}/extensions which injects the given
+// extension IDs into the profile and restarts the browser.
+func (r *BrowserReconciler) addExtensions(ctx context.Context, baseURL, browserID string, extensionIDs []string) (*launcherBrowser, error) {
+	type addExtRequest struct {
+		Extensions []string `json:"extensions"`
+	}
+	body, err := json.Marshal(addExtRequest{Extensions: extensionIDs})
+	if err != nil {
+		return nil, err
+	}
+
+	url := fmt.Sprintf("%s/browsers/%s/extensions", baseURL, browserID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := r.HTTPClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("add extensions returned %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	var result launcherBrowser
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decode add extensions response: %w", err)
+	}
+	return &result, nil
 }

@@ -13,6 +13,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -182,7 +183,7 @@ func (r *ControllerReconciler) reconcileControllerStatus(ctx context.Context, ct
 			"Waiting for controller pod to be ready", nil, controllerRequeuePending)
 	}
 
-	serviceURL := fmt.Sprintf("http://%s:%d/parser", ctrlCR.Name, controllerPort)
+	serviceURL := fmt.Sprintf("http://%s.%s:%d/parser", ctrlCR.Name, ctrlCR.Namespace, controllerPort)
 
 	// Sync browser registrations
 	registered, err := r.syncBrowserRegistrations(ctx, ctrlCR, serviceURL)
@@ -204,7 +205,7 @@ func (r *ControllerReconciler) setControllerStatus(
 ) (ctrl.Result, error) {
 	serviceURL := ""
 	if phase == browserv1.ControllerPhaseRunning {
-		serviceURL = fmt.Sprintf("http://%s:%d/parser", ctrlCR.Name, controllerPort)
+		serviceURL = fmt.Sprintf("http://%s.%s:%d/parser", ctrlCR.Name, ctrlCR.Namespace, controllerPort)
 	}
 
 	ctrlCR.Status.Phase = phase
@@ -215,6 +216,9 @@ func (r *ControllerReconciler) setControllerStatus(
 		ctrlCR.Status.RegisteredBrowserCount = len(registered)
 	}
 	if err := r.Status().Update(ctx, ctrlCR); err != nil {
+		if apierrors.IsConflict(err) {
+			return ctrl.Result{Requeue: true}, nil
+		}
 		return ctrl.Result{}, err
 	}
 	return ctrl.Result{RequeueAfter: requeue}, nil

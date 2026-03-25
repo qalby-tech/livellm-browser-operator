@@ -58,7 +58,7 @@ func main() {
 		setupLog.Info("default controller image overridden", "image", defaultControllerImage)
 	}
 
-	httpClient := &http.Client{Timeout: 10 * time.Second}
+	httpClient := &http.Client{Timeout: 60 * time.Second}
 
 	browserReconciler := &controller.BrowserReconciler{
 		Client:              mgr.GetClient(),
