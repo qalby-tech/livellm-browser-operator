@@ -35,7 +35,7 @@ jobs:
             exit 1
           fi
           if [ "${{ github.ref_name }}" = "develop" ]; then
-            TAG="dev-$VERSION"
+            TAG="$VERSION-dev"
           else
             TAG="$VERSION"
           fi
@@ -81,7 +81,7 @@ jobs:
             exit 1
           fi
           if [ "${{ github.ref_name }}" = "develop" ]; then
-            TAG="dev-$VERSION"
+            TAG="$VERSION-dev"
           else
             TAG="$VERSION"
           fi
