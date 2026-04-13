@@ -116,7 +116,7 @@ func (r *BrowserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{RequeueAfter: requeueRetry}, nil
 	}
 
-	// 5. Reconcile browser status (pod readiness, WS URL)
+	// 5. Reconcile browser status (pod readiness)
 	return r.reconcileStatus(ctx, &browser)
 }
 
@@ -195,9 +195,10 @@ func (r *BrowserReconciler) ensureDeployment(ctx context.Context, browser *brows
 		return nil
 	})
 
-	// Retry on conflict — the object was modified by another process
+	// Conflict is expected in Kubernetes — just return nil so the reconcile
+	// loop succeeds and the next periodic requeue picks up the latest state.
 	if apierrors.IsConflict(err) {
-		return err
+		return nil
 	}
 	return err
 }

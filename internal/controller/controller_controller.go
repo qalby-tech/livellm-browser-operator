@@ -172,8 +172,11 @@ Name: br.Name, ProfileUID: profileUID, WsURL: br.Status.WsURL,
 }
 sort.Slice(registered, func(i, j int) bool { return registered[i].ProfileUID < registered[j].ProfileUID })
 
-return r.setControllerStatus(ctx, ctrlCR, browserv1.ControllerPhaseRunning,
-"Controller is ready (browser discovery via Redis)", registered, controllerRequeueReady)
+	// Note: browser registration happens via Redis, not via the operator.
+	// The controller auto-discovers browsers from Redis and connects to them.
+	// This status list is informational only.
+	return r.setControllerStatus(ctx, ctrlCR, browserv1.ControllerPhaseRunning,
+		"Controller is ready (browsers discovered via Redis)", registered, controllerRequeueReady)
 }
 
 func (r *ControllerReconciler) setControllerStatus(
