@@ -51,11 +51,15 @@ func main() {
 	// Read configuration from environment
 	defaultBrowserImage := os.Getenv("DEFAULT_BROWSER_IMAGE")
 	defaultControllerImage := os.Getenv("DEFAULT_CONTROLLER_IMAGE")
+	redisURL := os.Getenv("REDIS_URL")
 	if defaultBrowserImage != "" {
 		setupLog.Info("default browser image overridden", "image", defaultBrowserImage)
 	}
 	if defaultControllerImage != "" {
 		setupLog.Info("default controller image overridden", "image", defaultControllerImage)
+	}
+	if redisURL != "" {
+		setupLog.Info("redis URL configured", "url", redisURL)
 	}
 
 	httpClient := &http.Client{Timeout: 60 * time.Second}
@@ -65,6 +69,7 @@ func main() {
 		Scheme:              mgr.GetScheme(),
 		HTTPClient:          httpClient,
 		DefaultBrowserImage: defaultBrowserImage,
+		RedisURL:            redisURL,
 	}
 	if err := browserReconciler.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Browser")
@@ -76,6 +81,7 @@ func main() {
 		Scheme:                 mgr.GetScheme(),
 		HTTPClient:             httpClient,
 		DefaultControllerImage: defaultControllerImage,
+		RedisURL:               redisURL,
 	}
 	if err := controllerReconciler.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Controller")

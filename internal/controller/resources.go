@@ -85,7 +85,7 @@ func buildPVC(browser *browserv1.Browser) *corev1.PersistentVolumeClaim {
 
 // applyDeploymentSpec sets the desired spec on an existing or new Deployment object.
 // Used inside controllerutil.CreateOrUpdate's mutate function.
-func applyDeploymentSpec(deploy *appsv1.Deployment, browser *browserv1.Browser, defaultImg string) {
+func applyDeploymentSpec(deploy *appsv1.Deployment, browser *browserv1.Browser, defaultImg string, redisURL string) {
 	if defaultImg == "" {
 		defaultImg = defaultImage
 	}
@@ -155,6 +155,13 @@ func applyDeploymentSpec(deploy *appsv1.Deployment, browser *browserv1.Browser, 
 							{Name: "VNC_PW", Value: "headless"},
 							{Name: "VNC_RESOLUTION", Value: "1920x1080"},
 							{Name: "DISPLAY", Value: ":1"},
+							{Name: "REDIS_URL", Value: redisURL},
+							{
+								Name: "POD_IP",
+								ValueFrom: &corev1.EnvVarSource{
+									FieldRef: &corev1.ObjectFieldSelector{FieldPath: "status.podIP"},
+								},
+							},
 						},
 						Resources: corev1.ResourceRequirements{
 							Requests: requests,

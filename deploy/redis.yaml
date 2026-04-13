@@ -1,0 +1,57 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: livellm-redis
+  namespace: browser
+  labels:
+    app.kubernetes.io/name: livellm-redis
+    app.kubernetes.io/managed-by: livellm-operator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: livellm-redis
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: livellm-redis
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          ports:
+            - containerPort: 6379
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: livellm-redis
+  namespace: browser
+  labels:
+    app.kubernetes.io/name: livellm-redis
+    app.kubernetes.io/managed-by: livellm-operator
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: livellm-redis
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: 6379

@@ -34,7 +34,7 @@ func controllerSelectorLabels(name string) map[string]string {
 // Controller Deployment
 // ────────────────────────────────────────────────────────────
 
-func applyControllerDeploymentSpec(deploy *appsv1.Deployment, ctrlCR *browserv1.Controller, defaultImg string) {
+func applyControllerDeploymentSpec(deploy *appsv1.Deployment, ctrlCR *browserv1.Controller, defaultImg string, redisURL string) {
 	if defaultImg == "" {
 		defaultImg = defaultControllerImage
 	}
@@ -88,6 +88,9 @@ func applyControllerDeploymentSpec(deploy *appsv1.Deployment, ctrlCR *browserv1.
 						Image: image,
 						Ports: []corev1.ContainerPort{
 							{Name: "http", ContainerPort: int32(controllerPort)},
+						},
+						Env: []corev1.EnvVar{
+							{Name: "REDIS_URL", Value: redisURL},
 						},
 						Resources: corev1.ResourceRequirements{
 							Requests: requests,

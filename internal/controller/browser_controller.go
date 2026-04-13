@@ -67,6 +67,7 @@ type BrowserReconciler struct {
 	Scheme              *runtime.Scheme
 	HTTPClient          *http.Client
 	DefaultBrowserImage string // fallback image when Browser CR omits spec.image
+	RedisURL            string // Redis URL passed to browser pods for state registration
 }
 
 // SetupWithManager registers the reconciler with the manager.
@@ -187,9 +188,17 @@ func (r *BrowserReconciler) ensureDeployment(ctx context.Context, browser *brows
 	}
 
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, deploy, func() error {
-		applyDeploymentSpec(deploy, browser, r.DefaultBrowserImage)
-		return controllerutil.SetControllerReference(browser, deploy, r.Scheme)
+		applyDeploymentSpec(deploy, browser, r.DefaultBrowserImage, r.RedisURL)
+		if err := controllerutil.SetControllerReference(browser, deploy, r.Scheme); err != nil {
+			return err
+		}
+		return nil
 	})
+
+	// Retry on conflict — the object was modified by another process
+	if apierrors.IsConflict(err) {
+		return err
+	}
 	return err
 }
 
