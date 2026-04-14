@@ -51,12 +51,20 @@ func main() {
 	// Read configuration from environment
 	defaultBrowserImage := os.Getenv("DEFAULT_BROWSER_IMAGE")
 	defaultControllerImage := os.Getenv("DEFAULT_CONTROLLER_IMAGE")
+	defaultBrowserPullPolicy := os.Getenv("DEFAULT_BROWSER_PULL_POLICY")
+	defaultControllerPullPolicy := os.Getenv("DEFAULT_CONTROLLER_PULL_POLICY")
 	redisURL := os.Getenv("REDIS_URL")
 	if defaultBrowserImage != "" {
 		setupLog.Info("default browser image overridden", "image", defaultBrowserImage)
 	}
 	if defaultControllerImage != "" {
 		setupLog.Info("default controller image overridden", "image", defaultControllerImage)
+	}
+	if defaultBrowserPullPolicy != "" {
+		setupLog.Info("default browser pull policy configured", "pullPolicy", defaultBrowserPullPolicy)
+	}
+	if defaultControllerPullPolicy != "" {
+		setupLog.Info("default controller pull policy configured", "pullPolicy", defaultControllerPullPolicy)
 	}
 	if redisURL != "" {
 		setupLog.Info("redis URL configured", "url", redisURL)
@@ -65,11 +73,12 @@ func main() {
 	httpClient := &http.Client{Timeout: 60 * time.Second}
 
 	browserReconciler := &controller.BrowserReconciler{
-		Client:              mgr.GetClient(),
-		Scheme:              mgr.GetScheme(),
-		HTTPClient:          httpClient,
-		DefaultBrowserImage: defaultBrowserImage,
-		RedisURL:            redisURL,
+		Client:                   mgr.GetClient(),
+		Scheme:                   mgr.GetScheme(),
+		HTTPClient:               httpClient,
+		DefaultBrowserImage:      defaultBrowserImage,
+		DefaultBrowserPullPolicy: defaultBrowserPullPolicy,
+		RedisURL:                 redisURL,
 	}
 	if err := browserReconciler.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Browser")
@@ -77,11 +86,12 @@ func main() {
 	}
 
 	controllerReconciler := &controller.ControllerReconciler{
-		Client:                 mgr.GetClient(),
-		Scheme:                 mgr.GetScheme(),
-		HTTPClient:             httpClient,
-		DefaultControllerImage: defaultControllerImage,
-		RedisURL:               redisURL,
+		Client:                      mgr.GetClient(),
+		Scheme:                      mgr.GetScheme(),
+		HTTPClient:                  httpClient,
+		DefaultControllerImage:      defaultControllerImage,
+		DefaultControllerPullPolicy: defaultControllerPullPolicy,
+		RedisURL:                    redisURL,
 	}
 	if err := controllerReconciler.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Controller")

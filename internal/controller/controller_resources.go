@@ -34,13 +34,16 @@ func controllerSelectorLabels(name string) map[string]string {
 // Controller Deployment
 // ────────────────────────────────────────────────────────────
 
-func applyControllerDeploymentSpec(deploy *appsv1.Deployment, ctrlCR *browserv1.Controller, defaultImg string, redisURL string) {
+func applyControllerDeploymentSpec(deploy *appsv1.Deployment, ctrlCR *browserv1.Controller, defaultImg string, pullPolicy string, redisURL string) {
 	if defaultImg == "" {
 		defaultImg = defaultControllerImage
 	}
 	image := ctrlCR.Spec.Image
 	if image == "" {
 		image = defaultImg
+	}
+	if pullPolicy == "" {
+		pullPolicy = "IfNotPresent"
 	}
 
 	replicas := int32(1)
@@ -84,8 +87,9 @@ func applyControllerDeploymentSpec(deploy *appsv1.Deployment, ctrlCR *browserv1.
 			Spec: corev1.PodSpec{
 				Containers: []corev1.Container{
 					{
-						Name:  "controller",
-						Image: image,
+						Name:            "controller",
+						Image:           image,
+						ImagePullPolicy: corev1.PullPolicy(pullPolicy),
 						Ports: []corev1.ContainerPort{
 							{Name: "http", ContainerPort: int32(controllerPort)},
 						},

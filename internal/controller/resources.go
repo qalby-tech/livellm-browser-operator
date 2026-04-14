@@ -85,13 +85,16 @@ func buildPVC(browser *browserv1.Browser) *corev1.PersistentVolumeClaim {
 
 // applyDeploymentSpec sets the desired spec on an existing or new Deployment object.
 // Used inside controllerutil.CreateOrUpdate's mutate function.
-func applyDeploymentSpec(deploy *appsv1.Deployment, browser *browserv1.Browser, defaultImg string, redisURL string) {
+func applyDeploymentSpec(deploy *appsv1.Deployment, browser *browserv1.Browser, defaultImg string, pullPolicy string, redisURL string) {
 	if defaultImg == "" {
 		defaultImg = defaultImage
 	}
 	image := browser.Spec.Image
 	if image == "" {
 		image = defaultImg
+	}
+	if pullPolicy == "" {
+		pullPolicy = "IfNotPresent"
 	}
 	shmSize := browser.Spec.ShmSize
 	if shmSize == "" {
@@ -144,8 +147,9 @@ func applyDeploymentSpec(deploy *appsv1.Deployment, browser *browserv1.Browser, 
 				},
 				Containers: []corev1.Container{
 					{
-						Name:  "browser",
-						Image: image,
+						Name:            "browser",
+						Image:           image,
+						ImagePullPolicy: corev1.PullPolicy(pullPolicy),
 						Ports: []corev1.ContainerPort{
 							{Name: "vnc", ContainerPort: vncPort},
 							{Name: "novnc", ContainerPort: novncPort},

@@ -64,10 +64,11 @@ type createBrowserRequest struct {
 // BrowserReconciler reconciles Browser custom resources.
 type BrowserReconciler struct {
 	client.Client
-	Scheme              *runtime.Scheme
-	HTTPClient          *http.Client
-	DefaultBrowserImage string // fallback image when Browser CR omits spec.image
-	RedisURL            string // Redis URL passed to browser pods for state registration
+	Scheme                   *runtime.Scheme
+	HTTPClient               *http.Client
+	DefaultBrowserImage      string // fallback image when Browser CR omits spec.image
+	DefaultBrowserPullPolicy string // fallback pull policy (e.g. "Always", "IfNotPresent")
+	RedisURL                 string // Redis URL passed to browser pods for state registration
 }
 
 // SetupWithManager registers the reconciler with the manager.
@@ -188,7 +189,7 @@ func (r *BrowserReconciler) ensureDeployment(ctx context.Context, browser *brows
 	}
 
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, deploy, func() error {
-		applyDeploymentSpec(deploy, browser, r.DefaultBrowserImage, r.RedisURL)
+		applyDeploymentSpec(deploy, browser, r.DefaultBrowserImage, r.DefaultBrowserPullPolicy, r.RedisURL)
 		if err := controllerutil.SetControllerReference(browser, deploy, r.Scheme); err != nil {
 			return err
 		}
