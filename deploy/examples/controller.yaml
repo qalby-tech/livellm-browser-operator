@@ -6,7 +6,7 @@ metadata:
   namespace: default
 spec:
   # Controller container image (optional, defaults to latest stable)
-  # image: kamasalyamov/livellm-controller:2.0.1
+  # image: kamasalyamov/livellm-browser:controller-2.0.1
 
   # Number of replicas
   replicas: 1
@@ -18,7 +18,16 @@ spec:
       memory: "512Mi"
     limits:
       cpu: "500m"
-      memory: "1Gi"
+      memory: "2Gi"
+
+  # Node.js V8 heap size for the Patchright driver (in MB).
+  # Defaults to "3072" (3 GB). Set to "0" to disable.
+  # nodeOptions: "3072"
+
+  # Additional environment variables for the controller container.
+  # extraEnv:
+  #   - name: MY_VAR
+  #     value: "my-value"
 
   # Optional: only register Browser CRs with these labels.
   # If omitted, ALL Running browsers in the same namespace are registered.
@@ -41,4 +50,5 @@ spec:
       memory: "512Mi"
     limits:
       cpu: "1"
-      memory: "2Gi"
+      memory: "4Gi"
+  nodeOptions: "4096"

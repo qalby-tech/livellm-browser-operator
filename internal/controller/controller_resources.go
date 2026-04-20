@@ -1,6 +1,8 @@
 package controller
 
 import (
+	"fmt"
+
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -60,7 +62,7 @@ func applyControllerDeploymentSpec(deploy *appsv1.Deployment, ctrlCR *browserv1.
 	}
 	limits := corev1.ResourceList{
 		corev1.ResourceCPU:    resource.MustParse("500m"),
-		corev1.ResourceMemory: resource.MustParse("1Gi"),
+		corev1.ResourceMemory: resource.MustParse("2Gi"),
 	}
 	if ctrlCR.Spec.Resources != nil {
 		if v, ok := ctrlCR.Spec.Resources.Requests["cpu"]; ok {
@@ -76,6 +78,22 @@ func applyControllerDeploymentSpec(deploy *appsv1.Deployment, ctrlCR *browserv1.
 			limits[corev1.ResourceMemory] = resource.MustParse(v)
 		}
 	}
+
+	nodeOptions := ctrlCR.Spec.NodeOptions
+	if nodeOptions == "" {
+		nodeOptions = "3072"
+	}
+
+	env := []corev1.EnvVar{
+		{Name: "REDIS_URL", Value: redisURL},
+	}
+	if nodeOptions != "0" {
+		env = append(env, corev1.EnvVar{
+			Name:  "NODE_OPTIONS",
+			Value: fmt.Sprintf("--max-old-space-size=%s", nodeOptions),
+		})
+	}
+	env = append(env, ctrlCR.Spec.ExtraEnv...)
 
 	deploy.Labels = lbls
 	deploy.Spec = appsv1.DeploymentSpec{
@@ -93,9 +111,7 @@ func applyControllerDeploymentSpec(deploy *appsv1.Deployment, ctrlCR *browserv1.
 						Ports: []corev1.ContainerPort{
 							{Name: "http", ContainerPort: int32(controllerPort)},
 						},
-						Env: []corev1.EnvVar{
-							{Name: "REDIS_URL", Value: redisURL},
-						},
+						Env: env,
 						Resources: corev1.ResourceRequirements{
 							Requests: requests,
 							Limits:   limits,

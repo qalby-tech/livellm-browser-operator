@@ -1,6 +1,7 @@
 package v1alpha1
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -25,6 +26,16 @@ type ControllerSpec struct {
 	// If empty, all Running Browser CRs in the same namespace are registered.
 	// +optional
 	BrowserSelector map[string]string `json:"browserSelector,omitempty"`
+
+	// NodeOptions sets the V8 --max-old-space-size for the Patchright Node.js driver.
+	// Given in MB (e.g. "3072"). Set to "0" to disable.
+	// Defaults to "3072" (3 GB) when empty.
+	// +optional
+	NodeOptions string `json:"nodeOptions,omitempty"`
+
+	// ExtraEnv is a list of additional environment variables injected into the controller container.
+	// +optional
+	ExtraEnv []corev1.EnvVar `json:"extraEnv,omitempty"`
 }
 
 // ControllerPhase describes the lifecycle phase of a Controller.

@@ -5,6 +5,7 @@
 package v1alpha1
 
 import (
+	"k8s.io/api/core/v1"
 	runtime "k8s.io/apimachinery/pkg/runtime"
 )
 
@@ -199,6 +200,13 @@ func (in *ControllerSpec) DeepCopyInto(out *ControllerSpec) {
 		*out = make(map[string]string, len(*in))
 		for key, val := range *in {
 			(*out)[key] = val
+		}
+	}
+	if in.ExtraEnv != nil {
+		in, out := &in.ExtraEnv, &out.ExtraEnv
+		*out = make([]v1.EnvVar, len(*in))
+		for i := range *in {
+			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
 	}
 }
