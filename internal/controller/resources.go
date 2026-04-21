@@ -101,6 +101,11 @@ func applyDeploymentSpec(deploy *appsv1.Deployment, browser *browserv1.Browser, 
 		shmSize = defaultShmSize
 	}
 
+	nodeOptions := browser.Spec.NodeOptions
+	if nodeOptions == "" {
+		nodeOptions = "3072"
+	}
+
 	replicas := int32(1)
 	if !browserWorkloadWanted(browser) {
 		replicas = 0
@@ -155,18 +160,7 @@ func applyDeploymentSpec(deploy *appsv1.Deployment, browser *browserv1.Browser, 
 							{Name: "novnc", ContainerPort: novncPort},
 							{Name: "launcher", ContainerPort: int32(launcherPort)},
 						},
-						Env: []corev1.EnvVar{
-							{Name: "VNC_PW", Value: "headless"},
-							{Name: "VNC_RESOLUTION", Value: "1920x1080"},
-							{Name: "DISPLAY", Value: ":1"},
-							{Name: "REDIS_URL", Value: redisURL},
-							{
-								Name: "POD_IP",
-								ValueFrom: &corev1.EnvVarSource{
-									FieldRef: &corev1.ObjectFieldSelector{FieldPath: "status.podIP"},
-								},
-							},
-						},
+						Env: buildBrowserEnv(redisURL, nodeOptions),
 						Resources: corev1.ResourceRequirements{
 							Requests: requests,
 							Limits:   limits,
@@ -249,6 +243,28 @@ func applyServiceSpec(svc *corev1.Service, browser *browserv1.Browser) {
 // ────────────────────────────────────────────────────────────
 // Helpers
 // ────────────────────────────────────────────────────────────
+
+func buildBrowserEnv(redisURL, nodeOptions string) []corev1.EnvVar {
+	env := []corev1.EnvVar{
+		{Name: "VNC_PW", Value: "headless"},
+		{Name: "VNC_RESOLUTION", Value: "1920x1080"},
+		{Name: "DISPLAY", Value: ":1"},
+		{Name: "REDIS_URL", Value: redisURL},
+		{
+			Name: "POD_IP",
+			ValueFrom: &corev1.EnvVarSource{
+				FieldRef: &corev1.ObjectFieldSelector{FieldPath: "status.podIP"},
+			},
+		},
+	}
+	if nodeOptions != "0" {
+		env = append(env, corev1.EnvVar{
+			Name:  "NODE_OPTIONS",
+			Value: fmt.Sprintf("--max-old-space-size=%s", nodeOptions),
+		})
+	}
+	return env
+}
 
 func resourcePtr(q resource.Quantity) *resource.Quantity {
 	return &q

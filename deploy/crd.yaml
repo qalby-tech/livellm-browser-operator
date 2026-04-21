@@ -107,6 +107,12 @@ spec:
                   Image overrides the browser container image.
                   If empty, the operator uses its configured default (DEFAULT_BROWSER_IMAGE env var).
                 type: string
+              nodeOptions:
+                description: |-
+                  NodeOptions sets the V8 --max-old-space-size for the Patchright Node.js driver.
+                  Given in MB (e.g. "3072"). Set to "0" to disable.
+                  Defaults to "3072" (3 GB) when empty.
+                type: string
               profileUid:
                 description: |-
                   ProfileUID is the unique profile identifier used as browser_id in the controller.

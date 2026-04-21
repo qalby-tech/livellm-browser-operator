@@ -56,6 +56,12 @@ type BrowserSpec struct {
 	// +kubebuilder:default="Retain"
 	// +optional
 	ReclaimPolicy string `json:"reclaimPolicy,omitempty"`
+
+	// NodeOptions sets the V8 --max-old-space-size for the Patchright Node.js driver.
+	// Given in MB (e.g. "3072"). Set to "0" to disable.
+	// Defaults to "3072" (3 GB) when empty.
+	// +optional
+	NodeOptions string `json:"nodeOptions,omitempty"`
 }
 
 // CookiesSource references a ConfigMap or Secret containing a JSON array of cookies.
