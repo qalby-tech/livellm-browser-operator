@@ -85,7 +85,7 @@ func buildPVC(browser *browserv1.Browser) *corev1.PersistentVolumeClaim {
 
 // applyDeploymentSpec sets the desired spec on an existing or new Deployment object.
 // Used inside controllerutil.CreateOrUpdate's mutate function.
-func applyDeploymentSpec(deploy *appsv1.Deployment, browser *browserv1.Browser, defaultImg string, pullPolicy string, redisURL string) {
+func applyDeploymentSpec(deploy *appsv1.Deployment, browser *browserv1.Browser, defaultImg string, pullPolicy string, redisURL string, defaultEnv []corev1.EnvVar) {
 	if defaultImg == "" {
 		defaultImg = defaultImage
 	}
@@ -99,11 +99,6 @@ func applyDeploymentSpec(deploy *appsv1.Deployment, browser *browserv1.Browser, 
 	shmSize := browser.Spec.ShmSize
 	if shmSize == "" {
 		shmSize = defaultShmSize
-	}
-
-	nodeOptions := browser.Spec.NodeOptions
-	if nodeOptions == "" {
-		nodeOptions = "3072"
 	}
 
 	replicas := int32(1)
@@ -160,7 +155,7 @@ func applyDeploymentSpec(deploy *appsv1.Deployment, browser *browserv1.Browser, 
 							{Name: "novnc", ContainerPort: novncPort},
 							{Name: "launcher", ContainerPort: int32(launcherPort)},
 						},
-						Env: buildBrowserEnv(redisURL, nodeOptions),
+						Env: buildBrowserEnv(redisURL, defaultEnv, browser.Spec.Env),
 						Resources: corev1.ResourceRequirements{
 							Requests: requests,
 							Limits:   limits,
@@ -172,11 +167,11 @@ func applyDeploymentSpec(deploy *appsv1.Deployment, browser *browserv1.Browser, 
 						ReadinessProbe: &corev1.Probe{
 							ProbeHandler: corev1.ProbeHandler{
 								HTTPGet: &corev1.HTTPGetAction{
-									Path: "/browsers",
+									Path: "/health",
 									Port: intstr.FromInt32(int32(launcherPort)),
 								},
 							},
-							InitialDelaySeconds: 15,
+							InitialDelaySeconds: 5,
 							PeriodSeconds:       5,
 							TimeoutSeconds:      3,
 							FailureThreshold:    6,
@@ -184,14 +179,25 @@ func applyDeploymentSpec(deploy *appsv1.Deployment, browser *browserv1.Browser, 
 						LivenessProbe: &corev1.Probe{
 							ProbeHandler: corev1.ProbeHandler{
 								HTTPGet: &corev1.HTTPGetAction{
+									Path: "/health",
+									Port: intstr.FromInt32(int32(launcherPort)),
+								},
+							},
+							InitialDelaySeconds: 15,
+							PeriodSeconds:       10,
+							TimeoutSeconds:      5,
+							FailureThreshold:    3,
+						},
+						StartupProbe: &corev1.Probe{
+							ProbeHandler: corev1.ProbeHandler{
+								HTTPGet: &corev1.HTTPGetAction{
 									Path: "/browsers",
 									Port: intstr.FromInt32(int32(launcherPort)),
 								},
 							},
-							InitialDelaySeconds: 30,
-							PeriodSeconds:       15,
-							TimeoutSeconds:      5,
-							FailureThreshold:    3,
+							InitialDelaySeconds: 5,
+							PeriodSeconds:       5,
+							FailureThreshold:    60,
 						},
 					},
 				},
@@ -244,12 +250,15 @@ func applyServiceSpec(svc *corev1.Service, browser *browserv1.Browser) {
 // Helpers
 // ────────────────────────────────────────────────────────────
 
-func buildBrowserEnv(redisURL, nodeOptions string) []corev1.EnvVar {
+func buildBrowserEnv(redisURL string, defaultEnv []corev1.EnvVar, extraEnv []corev1.EnvVar) []corev1.EnvVar {
+	// NODE_OPTIONS sized for the in-pod Playwright/patchright Node driver.
+	// Last-write-wins — overridable via spec.env or DEFAULT_BROWSER_ENV.
 	env := []corev1.EnvVar{
 		{Name: "VNC_PW", Value: "headless"},
 		{Name: "VNC_RESOLUTION", Value: "1920x1080"},
 		{Name: "DISPLAY", Value: ":1"},
 		{Name: "REDIS_URL", Value: redisURL},
+		{Name: "NODE_OPTIONS", Value: "--max-old-space-size=4096"},
 		{
 			Name: "POD_IP",
 			ValueFrom: &corev1.EnvVarSource{
@@ -257,12 +266,8 @@ func buildBrowserEnv(redisURL, nodeOptions string) []corev1.EnvVar {
 			},
 		},
 	}
-	if nodeOptions != "0" {
-		env = append(env, corev1.EnvVar{
-			Name:  "NODE_OPTIONS",
-			Value: fmt.Sprintf("--max-old-space-size=%s", nodeOptions),
-		})
-	}
+	env = append(env, defaultEnv...)
+	env = append(env, extraEnv...)
 	return env
 }
 

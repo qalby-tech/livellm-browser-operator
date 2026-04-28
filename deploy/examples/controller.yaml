@@ -20,14 +20,12 @@ spec:
       cpu: "500m"
       memory: "2Gi"
 
-  # Node.js V8 heap size for the Patchright driver (in MB).
-  # Defaults to "3072" (3 GB). Set to "0" to disable.
-  # nodeOptions: "3072"
-
-  # Additional environment variables for the controller container.
-  # extraEnv:
-  #   - name: MY_VAR
-  #     value: "my-value"
+  # Environment variables for the controller container.
+  # env:
+  #   - name: NODE_OPTIONS
+  #     value: "--max-old-space-size=3072"
+  #   - name: PAGE_POOL_SIZE
+  #     value: "10"
 
   # Optional: only register Browser CRs with these labels.
   # If omitted, ALL Running browsers in the same namespace are registered.
@@ -51,4 +49,6 @@ spec:
     limits:
       cpu: "1"
       memory: "4Gi"
-  nodeOptions: "4096"
+  env:
+    - name: NODE_OPTIONS
+      value: "--max-old-space-size=4096"

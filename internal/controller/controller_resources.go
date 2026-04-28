@@ -36,7 +36,7 @@ func controllerSelectorLabels(name string) map[string]string {
 // Controller Deployment
 // ────────────────────────────────────────────────────────────
 
-func applyControllerDeploymentSpec(deploy *appsv1.Deployment, ctrlCR *browserv1.Controller, defaultImg string, pullPolicy string, redisURL string) {
+func applyControllerDeploymentSpec(deploy *appsv1.Deployment, ctrlCR *browserv1.Controller, defaultImg string, pullPolicy string, redisURL string, defaultEnv []corev1.EnvVar) {
 	if defaultImg == "" {
 		defaultImg = defaultControllerImage
 	}
@@ -79,21 +79,21 @@ func applyControllerDeploymentSpec(deploy *appsv1.Deployment, ctrlCR *browserv1.
 		}
 	}
 
-	nodeOptions := ctrlCR.Spec.NodeOptions
-	if nodeOptions == "" {
-		nodeOptions = "3072"
-	}
-
+	// Default NODE_OPTIONS gives the Playwright/patchright Node driver enough
+	// heap to hold CDP buffers from heavy pages. Last-write-wins, so a user-
+	// supplied value in spec.env (or DEFAULT_CONTROLLER_ENV) still overrides.
 	env := []corev1.EnvVar{
 		{Name: "REDIS_URL", Value: redisURL},
+		{Name: "NODE_OPTIONS", Value: "--max-old-space-size=4096"},
 	}
-	if nodeOptions != "0" {
+	env = append(env, defaultEnv...)
+	if ctrlCR.Spec.MaxPagesPerBrowser != nil {
 		env = append(env, corev1.EnvVar{
-			Name:  "NODE_OPTIONS",
-			Value: fmt.Sprintf("--max-old-space-size=%s", nodeOptions),
+			Name:  "MAX_PAGES_PER_BROWSER",
+			Value: fmt.Sprintf("%d", *ctrlCR.Spec.MaxPagesPerBrowser),
 		})
 	}
-	env = append(env, ctrlCR.Spec.ExtraEnv...)
+	env = append(env, ctrlCR.Spec.Env...)
 
 	deploy.Labels = lbls
 	deploy.Spec = appsv1.DeploymentSpec{
@@ -123,7 +123,7 @@ func applyControllerDeploymentSpec(deploy *appsv1.Deployment, ctrlCR *browserv1.
 									Port: intstr.FromInt32(int32(controllerPort)),
 								},
 							},
-							InitialDelaySeconds: 10,
+							InitialDelaySeconds: 5,
 							PeriodSeconds:       5,
 							TimeoutSeconds:      3,
 							FailureThreshold:    6,
@@ -131,14 +131,25 @@ func applyControllerDeploymentSpec(deploy *appsv1.Deployment, ctrlCR *browserv1.
 						LivenessProbe: &corev1.Probe{
 							ProbeHandler: corev1.ProbeHandler{
 								HTTPGet: &corev1.HTTPGetAction{
+									Path: "/parser/healthz",
+									Port: intstr.FromInt32(int32(controllerPort)),
+								},
+							},
+							InitialDelaySeconds: 15,
+							PeriodSeconds:       10,
+							TimeoutSeconds:      5,
+							FailureThreshold:    3,
+						},
+						StartupProbe: &corev1.Probe{
+							ProbeHandler: corev1.ProbeHandler{
+								HTTPGet: &corev1.HTTPGetAction{
 									Path: "/parser/ping",
 									Port: intstr.FromInt32(int32(controllerPort)),
 								},
 							},
-							InitialDelaySeconds: 20,
-							PeriodSeconds:       15,
-							TimeoutSeconds:      5,
-							FailureThreshold:    3,
+							InitialDelaySeconds: 5,
+							PeriodSeconds:       5,
+							FailureThreshold:    30,
 						},
 					},
 				},

@@ -31,10 +31,14 @@ const (
 type ControllerReconciler struct {
 	client.Client
 	Scheme                      *runtime.Scheme
-	HTTPClient                  interface{}
+	RedisState                  *RedisState
 	DefaultControllerImage      string
-	DefaultControllerPullPolicy string // pull policy for controller pods (e.g. "Always", "IfNotPresent")
-	RedisURL                    string // Redis URL passed to controller pods for browser discovery
+	DefaultControllerPullPolicy string
+	DefaultControllerEnv        []corev1.EnvVar
+	RedisURL                    string
+	DefaultBrowserImage         string
+	DefaultBrowserPullPolicy    string
+	DefaultBrowserEnv           []corev1.EnvVar
 }
 
 func (r *ControllerReconciler) SetupWithManager(mgr ctrl.Manager) error {
@@ -107,7 +111,7 @@ func (r *ControllerReconciler) ensureControllerDeployment(ctx context.Context, c
 		ObjectMeta: metav1.ObjectMeta{Name: ctrlCR.Name, Namespace: ctrlCR.Namespace},
 	}
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, deploy, func() error {
-		applyControllerDeploymentSpec(deploy, ctrlCR, r.DefaultControllerImage, r.DefaultControllerPullPolicy, r.RedisURL)
+		applyControllerDeploymentSpec(deploy, ctrlCR, r.DefaultControllerImage, r.DefaultControllerPullPolicy, r.RedisURL, r.DefaultControllerEnv)
 		return controllerutil.SetControllerReference(ctrlCR, deploy, r.Scheme)
 	})
 	return err
@@ -146,7 +150,7 @@ func (r *ControllerReconciler) reconcileControllerStatus(ctx context.Context, ct
 
 	if readyPod == nil {
 		return r.setControllerStatus(ctx, ctrlCR, browserv1.ControllerPhaseCreating,
-			"Waiting for controller pod to be ready", nil, controllerRequeuePending)
+			"Waiting for controller pod to be ready", nil, 0, 0, controllerRequeuePending)
 	}
 
 	var browsers browserv1.BrowserList
@@ -173,16 +177,36 @@ func (r *ControllerReconciler) reconcileControllerStatus(ctx context.Context, ct
 	}
 	sort.Slice(registered, func(i, j int) bool { return registered[i].ProfileUID < registered[j].ProfileUID })
 
-	// Note: browser registration happens via Redis, not via the operator.
-	// The controller auto-discovers browsers from Redis and connects to them.
-	// This status list is informational only.
+	pageCounts := make(map[string]int)
+	controllerStates, err := r.RedisState.GetControllerBrowserStates(ctx)
+	if err == nil && controllerStates != nil {
+		for bid, state := range controllerStates {
+			pageCounts[bid] = state.SessionCount
+		}
+	}
+
+	totalPages := 0
+	for i := range registered {
+		pc := pageCounts[registered[i].ProfileUID]
+		registered[i].PageCount = pc
+		totalPages += pc
+	}
+
+	autoscaledCount := 0
+	if ctrlCR.Spec.AutoscaleBrowser != nil && *ctrlCR.Spec.AutoscaleBrowser {
+		autoscaledCount = r.countAutoscaledBrowsers(ctx, ctrlCR)
+		if err := r.autoscaleBrowsers(ctx, ctrlCR, registered, pageCounts); err != nil {
+			logger.Error(err, "autoscale check failed")
+		}
+	}
+
 	return r.setControllerStatus(ctx, ctrlCR, browserv1.ControllerPhaseRunning,
-		"Controller is ready (browsers discovered via Redis)", registered, controllerRequeueReady)
+		"Controller is ready (browsers discovered via Redis)", registered, totalPages, autoscaledCount, controllerRequeueReady)
 }
 
 func (r *ControllerReconciler) setControllerStatus(
 	ctx context.Context, ctrlCR *browserv1.Controller, phase browserv1.ControllerPhase,
-	message string, registered []browserv1.RegisteredBrowser, requeue time.Duration,
+	message string, registered []browserv1.RegisteredBrowser, totalPages int, autoscaledCount int, requeue time.Duration,
 ) (ctrl.Result, error) {
 	serviceURL := ""
 	if phase == browserv1.ControllerPhaseRunning {
@@ -195,6 +219,8 @@ func (r *ControllerReconciler) setControllerStatus(
 		ctrlCR.Status.RegisteredBrowsers = registered
 		ctrlCR.Status.RegisteredBrowserCount = len(registered)
 	}
+	ctrlCR.Status.TotalPageCount = totalPages
+	ctrlCR.Status.AutoscaledBrowserCount = autoscaledCount
 	if err := r.Status().Update(ctx, ctrlCR); err != nil {
 		if apierrors.IsConflict(err) {
 			return ctrl.Result{Requeue: true}, nil
@@ -202,4 +228,109 @@ func (r *ControllerReconciler) setControllerStatus(
 		return ctrl.Result{}, err
 	}
 	return ctrl.Result{RequeueAfter: requeue}, nil
+}
+
+// ────────────────────────────────────────────────────────────
+// Autoscaling
+// ────────────────────────────────────────────────────────────
+
+const autoscalePrefix = "autoscale-"
+
+func (r *ControllerReconciler) countAutoscaledBrowsers(ctx context.Context, ctrlCR *browserv1.Controller) int {
+	var browsers browserv1.BrowserList
+	if err := r.List(ctx, &browsers,
+		client.InNamespace(ctrlCR.Namespace),
+		client.MatchingLabels(map[string]string{
+			"livellm.io/autoscaled-by": ctrlCR.Name,
+		}),
+	); err != nil {
+		return 0
+	}
+	count := 0
+	for _, b := range browsers.Items {
+		if b.Spec.Running == nil || *b.Spec.Running {
+			count++
+		}
+	}
+	return count
+}
+
+func (r *ControllerReconciler) autoscaleBrowsers(
+	ctx context.Context,
+	ctrlCR *browserv1.Controller,
+	registered []browserv1.RegisteredBrowser,
+	pageCounts map[string]int,
+) error {
+	logger := log.FromContext(ctx)
+
+	maxPages := int32(50)
+	if ctrlCR.Spec.MaxPagesPerBrowser != nil {
+		maxPages = *ctrlCR.Spec.MaxPagesPerBrowser
+	}
+
+	needsScale := false
+	for _, rb := range registered {
+		if pageCounts[rb.ProfileUID] >= int(maxPages) {
+			needsScale = true
+			logger.Info("browser at page limit, triggering autoscale",
+				"browser", rb.Name, "pages", pageCounts[rb.ProfileUID], "limit", maxPages)
+			break
+		}
+	}
+	if !needsScale {
+		return nil
+	}
+
+	existingCount := r.countAutoscaledBrowsers(ctx, ctrlCR)
+
+	newName := fmt.Sprintf("%s-%s%d", ctrlCR.Name, autoscalePrefix, existingCount+1)
+	profileUID := fmt.Sprintf("auto-%s-%d", ctrlCR.Name, existingCount+1)
+
+	tmpl := ctrlCR.Spec.AutoscaleBrowserTemplate
+
+	browser := &browserv1.Browser{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      newName,
+			Namespace: ctrlCR.Namespace,
+			Labels: map[string]string{
+				"livellm.io/autoscaled-by": ctrlCR.Name,
+			},
+		},
+		Spec: browserv1.BrowserSpec{
+			ProfileUID:   profileUID,
+			ReclaimPolicy: "Delete",
+		},
+	}
+
+	if tmpl != nil {
+		browser.Spec.Resources = tmpl.Resources
+		if tmpl.Storage != "" {
+			browser.Spec.Storage = tmpl.Storage
+		}
+		if tmpl.ShmSize != "" {
+			browser.Spec.ShmSize = tmpl.ShmSize
+		}
+		if len(tmpl.Extensions) > 0 {
+			browser.Spec.Extensions = tmpl.Extensions
+		}
+		if len(tmpl.Env) > 0 {
+			browser.Spec.Env = tmpl.Env
+		}
+		if tmpl.ReclaimPolicy != "" {
+			browser.Spec.ReclaimPolicy = tmpl.ReclaimPolicy
+		}
+	}
+
+	if err := controllerutil.SetControllerReference(ctrlCR, browser, r.Scheme); err != nil {
+		return fmt.Errorf("set controller reference: %w", err)
+	}
+
+	if err := r.Create(ctx, browser); err != nil {
+		if apierrors.IsAlreadyExists(err) {
+			return nil
+		}
+		return fmt.Errorf("create autoscaled browser: %w", err)
+	}
+	logger.Info("created autoscaled browser", "name", newName, "profileUid", profileUID)
+	return nil
 }

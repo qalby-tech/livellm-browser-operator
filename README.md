@@ -110,8 +110,29 @@ spec:
 ### Connecting the controller
 
 Deploy a `Controller` CR (same namespace as your browsers). The operator creates
-the controller workload and syncs each running browser’s `status.wsUrl` to
-`POST /parser/browsers`. See `deploy/examples/controller.yaml`.
+the controller workload, which discovers browsers via Redis (`livellm:browsers`)
+and reconciles drift on a 10-second sync loop. See `deploy/examples/controller.yaml`.
+
+### Tuning the Node.js heap
+
+Both controller and browser pod templates default `NODE_OPTIONS=--max-old-space-size=4096`
+for the Playwright/patchright Node driver. To override, set `spec.env` on the CR
+or `DEFAULT_CONTROLLER_ENV` / `DEFAULT_BROWSER_ENV` on the operator deployment —
+duplicate env entries follow last-write-wins.
+
+```yaml
+spec:
+  env:
+    - name: NODE_OPTIONS
+      value: "--max-old-space-size=6144"
+```
+
+### Desired state via Redis
+
+The operator writes a per-browser desired state to Redis (`livellm:desired:browsers`)
+containing `extensions`, `cookies`, and `proxy`. The browser pod polls every 10s
+and applies any drift through a profile-preserving Chrome restart. Adding extensions,
+rotating cookies, or changing proxy at runtime is therefore non-destructive.
 
 ---
 

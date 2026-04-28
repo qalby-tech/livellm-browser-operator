@@ -27,15 +27,59 @@ type ControllerSpec struct {
 	// +optional
 	BrowserSelector map[string]string `json:"browserSelector,omitempty"`
 
-	// NodeOptions sets the V8 --max-old-space-size for the Patchright Node.js driver.
-	// Given in MB (e.g. "3072"). Set to "0" to disable.
-	// Defaults to "3072" (3 GB) when empty.
+	// Env is a list of environment variables injected into the controller container.
 	// +optional
-	NodeOptions string `json:"nodeOptions,omitempty"`
+	Env []corev1.EnvVar `json:"env,omitempty"`
 
-	// ExtraEnv is a list of additional environment variables injected into the controller container.
+	// MaxPagesPerBrowser sets the maximum number of concurrent pages (sessions)
+	// a single browser may hold.  When the limit is reached, new sessions are
+	// routed to a different browser or — if autoscaleBrowser is true — a new
+	// Browser CR is created automatically.
+	// Defaults to 50 when autoscaleBrowser is true.
 	// +optional
-	ExtraEnv []corev1.EnvVar `json:"extraEnv,omitempty"`
+	MaxPagesPerBrowser *int32 `json:"maxPagesPerBrowser,omitempty"`
+
+	// AutoscaleBrowser enables automatic creation of new Browser CRs when
+	// existing browsers reach maxPagesPerBrowser.
+	// The operator creates Browser CRs named <controller>-autoscale-<N>.
+	// +optional
+	AutoscaleBrowser *bool `json:"autoscaleBrowser,omitempty"`
+
+	// AutoscaleBrowserTemplate specifies the Browser spec used when creating
+	// autoscaled browsers.  If empty, the operator copies the spec from the
+	// first manually-defined Browser CR in the same namespace (matched by
+	// browserSelector).  At a minimum, profileUid is generated automatically.
+	// +optional
+	AutoscaleBrowserTemplate *AutoscaleBrowserTemplateSpec `json:"autoscaleBrowserTemplate,omitempty"`
+}
+
+// AutoscaleBrowserTemplateSpec is the template for browser CRs created by autoscaling.
+type AutoscaleBrowserTemplateSpec struct {
+	// Resources for the autoscaled browser pod.
+	// +optional
+	Resources *ResourcesSpec `json:"resources,omitempty"`
+
+	// Storage is the PVC size (e.g. "1Gi").
+	// +optional
+	Storage string `json:"storage,omitempty"`
+
+	// ShmSize is the /dev/shm size (e.g. "4Gi").
+	// +optional
+	ShmSize string `json:"shmSize,omitempty"`
+
+	// Extensions to install in autoscaled browsers.
+	// +optional
+	Extensions []string `json:"extensions,omitempty"`
+
+	// Env is a list of environment variables injected into autoscaled browser pods.
+	// +optional
+	Env []corev1.EnvVar `json:"env,omitempty"`
+
+	// ReclaimPolicy for the PVC when the autoscaled browser is deleted.
+	// +kubebuilder:validation:Enum=Retain;Delete
+	// +kubebuilder:default="Delete"
+	// +optional
+	ReclaimPolicy string `json:"reclaimPolicy,omitempty"`
 }
 
 // ControllerPhase describes the lifecycle phase of a Controller.
@@ -57,6 +101,9 @@ type RegisteredBrowser struct {
 	ProfileUID string `json:"profileUid"`
 	// WsURL is the CDP WebSocket URL registered with the controller.
 	WsURL string `json:"wsUrl"`
+	// PageCount is the current number of open pages/sessions on this browser.
+	// +optional
+	PageCount int `json:"pageCount,omitempty"`
 }
 
 // ControllerStatus defines the observed state of a Controller.
@@ -84,6 +131,14 @@ type ControllerStatus struct {
 	// Message is a human-readable status message.
 	// +optional
 	Message string `json:"message,omitempty"`
+
+	// TotalPageCount is the sum of open pages across all registered browsers.
+	// +optional
+	TotalPageCount int `json:"totalPageCount,omitempty"`
+
+	// AutoscaledBrowserCount is the number of Browser CRs created by autoscaling.
+	// +optional
+	AutoscaledBrowserCount int `json:"autoscaledBrowserCount,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -92,6 +147,7 @@ type ControllerStatus struct {
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="URL",type=string,JSONPath=`.status.url`
 // +kubebuilder:printcolumn:name="Browsers",type=integer,JSONPath=`.status.registeredBrowserCount`
+// +kubebuilder:printcolumn:name="Pages",type=integer,JSONPath=`.status.totalPageCount`,priority=1
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // Controller is the Schema for the controllers API.

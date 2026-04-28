@@ -1,11 +1,11 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
-	"net/http"
 	"os"
-	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -19,17 +19,30 @@ import (
 
 var scheme = runtime.NewScheme()
 
+// parseEnvVars reads a JSON array of {"name":"X","value":"Y"} from the given
+// environment variable and returns the corresponding []corev1.EnvVar slice.
+// Returns nil if the env var is empty or invalid.
+func parseEnvVars(envName string) []corev1.EnvVar {
+	raw := os.Getenv(envName)
+	if raw == "" {
+		return nil
+	}
+	var envVars []corev1.EnvVar
+	if err := json.Unmarshal([]byte(raw), &envVars); err != nil {
+		return nil
+	}
+	return envVars
+}
+
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(browserv1.AddToScheme(scheme))
 }
 
 func main() {
-	var metricsAddr string
 	var probeAddr string
 	var leaderElect bool
 
-	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
 	flag.BoolVar(&leaderElect, "leader-elect", false, "Enable leader election for HA.")
 	flag.Parse()
@@ -70,14 +83,22 @@ func main() {
 		setupLog.Info("redis URL configured", "url", redisURL)
 	}
 
-	httpClient := &http.Client{Timeout: 60 * time.Second}
+	redisState, err := controller.NewRedisState(redisURL)
+	if err != nil {
+		setupLog.Error(err, "unable to connect to Redis")
+		os.Exit(1)
+	}
+
+	defaultBrowserEnv := parseEnvVars("DEFAULT_BROWSER_ENV")
+	defaultControllerEnv := parseEnvVars("DEFAULT_CONTROLLER_ENV")
 
 	browserReconciler := &controller.BrowserReconciler{
 		Client:                   mgr.GetClient(),
 		Scheme:                   mgr.GetScheme(),
-		HTTPClient:               httpClient,
+		RedisState:               redisState,
 		DefaultBrowserImage:      defaultBrowserImage,
 		DefaultBrowserPullPolicy: defaultBrowserPullPolicy,
+		DefaultBrowserEnv:        defaultBrowserEnv,
 		RedisURL:                 redisURL,
 	}
 	if err := browserReconciler.SetupWithManager(mgr); err != nil {
@@ -88,10 +109,14 @@ func main() {
 	controllerReconciler := &controller.ControllerReconciler{
 		Client:                      mgr.GetClient(),
 		Scheme:                      mgr.GetScheme(),
-		HTTPClient:                  httpClient,
+		RedisState:                  redisState,
 		DefaultControllerImage:      defaultControllerImage,
 		DefaultControllerPullPolicy: defaultControllerPullPolicy,
+		DefaultControllerEnv:        defaultControllerEnv,
 		RedisURL:                    redisURL,
+		DefaultBrowserImage:         defaultBrowserImage,
+		DefaultBrowserPullPolicy:    defaultBrowserPullPolicy,
+		DefaultBrowserEnv:           defaultBrowserEnv,
 	}
 	if err := controllerReconciler.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Controller")
@@ -107,7 +132,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	setupLog.Info("starting manager")
+	setupLog.Info("starting manager", "defaultBrowserEnv", defaultBrowserEnv, "defaultControllerEnv", defaultControllerEnv)
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
