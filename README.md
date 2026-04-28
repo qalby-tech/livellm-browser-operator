@@ -115,10 +115,17 @@ and reconciles drift on a 10-second sync loop. See `deploy/examples/controller.y
 
 ### Tuning the Node.js heap
 
-Both controller and browser pod templates default `NODE_OPTIONS=--max-old-space-size=4096`
-for the Playwright/patchright Node driver. To override, set `spec.env` on the CR
-or `DEFAULT_CONTROLLER_ENV` / `DEFAULT_BROWSER_ENV` on the operator deployment —
-duplicate env entries follow last-write-wins.
+The **controller** pod is Node-only (no Chrome). The operator auto-sizes
+`NODE_OPTIONS=--max-old-space-size=N` from the pod's memory limit:
+`N = min(limit / 2, 4096)` MiB, floored at 512 MiB. So a 2 GiB controller
+gets 1024, a 4 GiB gets 2048, anything ≥ 8 GiB caps at 4096. Override via
+`spec.env` (or `DEFAULT_CONTROLLER_ENV`) only when the auto value is
+unsuitable — duplicate env entries are last-write-wins.
+
+The **browser** pod hosts Chrome itself, so the operator deliberately does
+**not** set `NODE_OPTIONS` there — Chrome must keep the bulk of the pod's
+memory budget. Set it explicitly via `spec.env` only if you have measured
+that the in-pod Node driver, not Chrome, is the memory consumer.
 
 ```yaml
 spec:
@@ -126,6 +133,13 @@ spec:
     - name: NODE_OPTIONS
       value: "--max-old-space-size=6144"
 ```
+
+### Default resources
+
+The chart exposes `browser.resources` and `controller.resources` (passed to
+the operator as `DEFAULT_BROWSER_RESOURCES` / `DEFAULT_CONTROLLER_RESOURCES`).
+Precedence on each pod: the CR's `spec.resources` wins → chart default →
+operator built-in fallback.
 
 ### Desired state via Redis
 

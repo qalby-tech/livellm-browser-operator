@@ -20,12 +20,12 @@ spec:
       cpu: "500m"
       memory: "2Gi"
 
-  # Environment variables for the controller container.
+  # Environment variables for the controller container. NODE_OPTIONS is
+  # auto-sized from the pod memory limit (min(limit/2, 4096) MiB, floored
+  # at 512 MiB) — only override if the auto value is unsuitable.
   # env:
   #   - name: NODE_OPTIONS
-  #     value: "--max-old-space-size=3072"
-  #   - name: PAGE_POOL_SIZE
-  #     value: "10"
+  #     value: "--max-old-space-size=2048"
 
   # Optional: only register Browser CRs with these labels.
   # If omitted, ALL Running browsers in the same namespace are registered.
@@ -49,6 +49,7 @@ spec:
     limits:
       cpu: "1"
       memory: "4Gi"
-  env:
-    - name: NODE_OPTIONS
-      value: "--max-old-space-size=4096"
+  # NODE_OPTIONS is auto-sized from the memory limit; uncomment to override.
+  # env:
+  #   - name: NODE_OPTIONS
+  #     value: "--max-old-space-size=3072"
