@@ -36,7 +36,7 @@ func controllerSelectorLabels(name string) map[string]string {
 // Controller Deployment
 // ────────────────────────────────────────────────────────────
 
-func applyControllerDeploymentSpec(deploy *appsv1.Deployment, ctrlCR *browserv1.Controller, defaultImg string, pullPolicy string, redisURL string, defaultEnv []corev1.EnvVar) {
+func applyControllerDeploymentSpec(deploy *appsv1.Deployment, ctrlCR *browserv1.Controller, defaultImg string, pullPolicy string, redisURL string, defaultEnv []corev1.EnvVar, defaultRes *browserv1.ResourcesSpec) {
 	if defaultImg == "" {
 		defaultImg = defaultControllerImage
 	}
@@ -64,27 +64,17 @@ func applyControllerDeploymentSpec(deploy *appsv1.Deployment, ctrlCR *browserv1.
 		corev1.ResourceCPU:    resource.MustParse("500m"),
 		corev1.ResourceMemory: resource.MustParse("2Gi"),
 	}
-	if ctrlCR.Spec.Resources != nil {
-		if v, ok := ctrlCR.Spec.Resources.Requests["cpu"]; ok {
-			requests[corev1.ResourceCPU] = resource.MustParse(v)
-		}
-		if v, ok := ctrlCR.Spec.Resources.Requests["memory"]; ok {
-			requests[corev1.ResourceMemory] = resource.MustParse(v)
-		}
-		if v, ok := ctrlCR.Spec.Resources.Limits["cpu"]; ok {
-			limits[corev1.ResourceCPU] = resource.MustParse(v)
-		}
-		if v, ok := ctrlCR.Spec.Resources.Limits["memory"]; ok {
-			limits[corev1.ResourceMemory] = resource.MustParse(v)
-		}
-	}
+	applyResourcesOverride(requests, limits, defaultRes)
+	applyResourcesOverride(requests, limits, ctrlCR.Spec.Resources)
 
-	// Default NODE_OPTIONS gives the Playwright/patchright Node driver enough
-	// heap to hold CDP buffers from heavy pages. Last-write-wins, so a user-
-	// supplied value in spec.env (or DEFAULT_CONTROLLER_ENV) still overrides.
+	// NODE_OPTIONS scales from the pod's memory limit. The controller pod
+	// is Node-only (no Chrome), so up to ~half the limit can safely go to V8.
+	// Last-write-wins, so a user-supplied value in spec.env (or
+	// DEFAULT_CONTROLLER_ENV) still overrides.
+	heapMiB := nodeMaxOldSpaceMiB(limits[corev1.ResourceMemory])
 	env := []corev1.EnvVar{
 		{Name: "REDIS_URL", Value: redisURL},
-		{Name: "NODE_OPTIONS", Value: "--max-old-space-size=4096"},
+		{Name: "NODE_OPTIONS", Value: fmt.Sprintf("--max-old-space-size=%d", heapMiB)},
 	}
 	env = append(env, defaultEnv...)
 	if ctrlCR.Spec.MaxPagesPerBrowser != nil {

@@ -85,7 +85,7 @@ func buildPVC(browser *browserv1.Browser) *corev1.PersistentVolumeClaim {
 
 // applyDeploymentSpec sets the desired spec on an existing or new Deployment object.
 // Used inside controllerutil.CreateOrUpdate's mutate function.
-func applyDeploymentSpec(deploy *appsv1.Deployment, browser *browserv1.Browser, defaultImg string, pullPolicy string, redisURL string, defaultEnv []corev1.EnvVar) {
+func applyDeploymentSpec(deploy *appsv1.Deployment, browser *browserv1.Browser, defaultImg string, pullPolicy string, redisURL string, defaultEnv []corev1.EnvVar, defaultRes *browserv1.ResourcesSpec) {
 	if defaultImg == "" {
 		defaultImg = defaultImage
 	}
@@ -108,7 +108,7 @@ func applyDeploymentSpec(deploy *appsv1.Deployment, browser *browserv1.Browser, 
 	lbls := labels(browser.Name)
 	sel := selectorLabels(browser.Name)
 
-	// Resource requirements
+	// Resource requirements: spec.Resources beats chart-default beats hard-default.
 	requests := corev1.ResourceList{
 		corev1.ResourceCPU:    resource.MustParse("500m"),
 		corev1.ResourceMemory: resource.MustParse("2Gi"),
@@ -117,20 +117,8 @@ func applyDeploymentSpec(deploy *appsv1.Deployment, browser *browserv1.Browser, 
 		corev1.ResourceCPU:    resource.MustParse("1"),
 		corev1.ResourceMemory: resource.MustParse("4Gi"),
 	}
-	if browser.Spec.Resources != nil {
-		if v, ok := browser.Spec.Resources.Requests["cpu"]; ok {
-			requests[corev1.ResourceCPU] = resource.MustParse(v)
-		}
-		if v, ok := browser.Spec.Resources.Requests["memory"]; ok {
-			requests[corev1.ResourceMemory] = resource.MustParse(v)
-		}
-		if v, ok := browser.Spec.Resources.Limits["cpu"]; ok {
-			limits[corev1.ResourceCPU] = resource.MustParse(v)
-		}
-		if v, ok := browser.Spec.Resources.Limits["memory"]; ok {
-			limits[corev1.ResourceMemory] = resource.MustParse(v)
-		}
-	}
+	applyResourcesOverride(requests, limits, defaultRes)
+	applyResourcesOverride(requests, limits, browser.Spec.Resources)
 
 	deploy.Labels = lbls
 	deploy.Spec = appsv1.DeploymentSpec{
@@ -251,14 +239,17 @@ func applyServiceSpec(svc *corev1.Service, browser *browserv1.Browser) {
 // ────────────────────────────────────────────────────────────
 
 func buildBrowserEnv(redisURL string, defaultEnv []corev1.EnvVar, extraEnv []corev1.EnvVar) []corev1.EnvVar {
-	// NODE_OPTIONS sized for the in-pod Playwright/patchright Node driver.
-	// Last-write-wins — overridable via spec.env or DEFAULT_BROWSER_ENV.
+	// NB: deliberately no NODE_OPTIONS default here — the browser pod hosts
+	// Chrome itself, which must keep the bulk of the pod's memory budget.
+	// Setting --max-old-space-size to anything large would let V8 starve
+	// Chrome and cause kubelet OOMKills. If a user really needs to tune the
+	// in-pod Node driver heap, they can pass NODE_OPTIONS via spec.env or
+	// DEFAULT_BROWSER_ENV.
 	env := []corev1.EnvVar{
 		{Name: "VNC_PW", Value: "headless"},
 		{Name: "VNC_RESOLUTION", Value: "1920x1080"},
 		{Name: "DISPLAY", Value: ":1"},
 		{Name: "REDIS_URL", Value: redisURL},
-		{Name: "NODE_OPTIONS", Value: "--max-old-space-size=4096"},
 		{
 			Name: "POD_IP",
 			ValueFrom: &corev1.EnvVarSource{
@@ -273,6 +264,47 @@ func buildBrowserEnv(redisURL string, defaultEnv []corev1.EnvVar, extraEnv []cor
 
 func resourcePtr(q resource.Quantity) *resource.Quantity {
 	return &q
+}
+
+// applyResourcesOverride mutates requests/limits in-place from an override.
+// Missing fields in the override are kept as-is.
+func applyResourcesOverride(requests, limits corev1.ResourceList, override *browserv1.ResourcesSpec) {
+	if override == nil {
+		return
+	}
+	if v, ok := override.Requests["cpu"]; ok {
+		requests[corev1.ResourceCPU] = resource.MustParse(v)
+	}
+	if v, ok := override.Requests["memory"]; ok {
+		requests[corev1.ResourceMemory] = resource.MustParse(v)
+	}
+	if v, ok := override.Limits["cpu"]; ok {
+		limits[corev1.ResourceCPU] = resource.MustParse(v)
+	}
+	if v, ok := override.Limits["memory"]; ok {
+		limits[corev1.ResourceMemory] = resource.MustParse(v)
+	}
+}
+
+// nodeMaxOldSpaceMiB returns min(memLimit/2, 4096) MiB, floored at 512 MiB.
+// Used to size --max-old-space-size for the Node-only controller pod.
+func nodeMaxOldSpaceMiB(memLimit resource.Quantity) int64 {
+	const (
+		hardCapMiB = int64(4096)
+		floorMiB   = int64(512)
+	)
+	bytes := memLimit.Value()
+	if bytes <= 0 {
+		return hardCapMiB
+	}
+	halfMiB := bytes / (2 * 1024 * 1024)
+	if halfMiB > hardCapMiB {
+		return hardCapMiB
+	}
+	if halfMiB < floorMiB {
+		return floorMiB
+	}
+	return halfMiB
 }
 
 func int64Ptr(v int64) *int64 {

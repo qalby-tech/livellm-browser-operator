@@ -35,6 +35,7 @@ type ControllerReconciler struct {
 	DefaultControllerImage      string
 	DefaultControllerPullPolicy string
 	DefaultControllerEnv        []corev1.EnvVar
+	DefaultControllerResources  *browserv1.ResourcesSpec
 	RedisURL                    string
 	DefaultBrowserImage         string
 	DefaultBrowserPullPolicy    string
@@ -111,7 +112,7 @@ func (r *ControllerReconciler) ensureControllerDeployment(ctx context.Context, c
 		ObjectMeta: metav1.ObjectMeta{Name: ctrlCR.Name, Namespace: ctrlCR.Namespace},
 	}
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, deploy, func() error {
-		applyControllerDeploymentSpec(deploy, ctrlCR, r.DefaultControllerImage, r.DefaultControllerPullPolicy, r.RedisURL, r.DefaultControllerEnv)
+		applyControllerDeploymentSpec(deploy, ctrlCR, r.DefaultControllerImage, r.DefaultControllerPullPolicy, r.RedisURL, r.DefaultControllerEnv, r.DefaultControllerResources)
 		return controllerutil.SetControllerReference(ctrlCR, deploy, r.Scheme)
 	})
 	return err

@@ -34,6 +34,21 @@ func parseEnvVars(envName string) []corev1.EnvVar {
 	return envVars
 }
 
+// parseResources reads a JSON object {"requests":{...},"limits":{...}} from
+// the given env var and returns it as a ResourcesSpec. Returns nil on empty
+// or invalid input.
+func parseResources(envName string) *browserv1.ResourcesSpec {
+	raw := os.Getenv(envName)
+	if raw == "" {
+		return nil
+	}
+	var rs browserv1.ResourcesSpec
+	if err := json.Unmarshal([]byte(raw), &rs); err != nil {
+		return nil
+	}
+	return &rs
+}
+
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(browserv1.AddToScheme(scheme))
@@ -91,6 +106,8 @@ func main() {
 
 	defaultBrowserEnv := parseEnvVars("DEFAULT_BROWSER_ENV")
 	defaultControllerEnv := parseEnvVars("DEFAULT_CONTROLLER_ENV")
+	defaultBrowserResources := parseResources("DEFAULT_BROWSER_RESOURCES")
+	defaultControllerResources := parseResources("DEFAULT_CONTROLLER_RESOURCES")
 
 	browserReconciler := &controller.BrowserReconciler{
 		Client:                   mgr.GetClient(),
@@ -99,6 +116,7 @@ func main() {
 		DefaultBrowserImage:      defaultBrowserImage,
 		DefaultBrowserPullPolicy: defaultBrowserPullPolicy,
 		DefaultBrowserEnv:        defaultBrowserEnv,
+		DefaultBrowserResources:  defaultBrowserResources,
 		RedisURL:                 redisURL,
 	}
 	if err := browserReconciler.SetupWithManager(mgr); err != nil {
@@ -113,6 +131,7 @@ func main() {
 		DefaultControllerImage:      defaultControllerImage,
 		DefaultControllerPullPolicy: defaultControllerPullPolicy,
 		DefaultControllerEnv:        defaultControllerEnv,
+		DefaultControllerResources:  defaultControllerResources,
 		RedisURL:                    redisURL,
 		DefaultBrowserImage:         defaultBrowserImage,
 		DefaultBrowserPullPolicy:    defaultBrowserPullPolicy,

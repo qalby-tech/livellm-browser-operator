@@ -40,6 +40,7 @@ type BrowserReconciler struct {
 	DefaultBrowserImage      string
 	DefaultBrowserPullPolicy string
 	DefaultBrowserEnv        []corev1.EnvVar
+	DefaultBrowserResources  *browserv1.ResourcesSpec
 	RedisURL                 string
 }
 
@@ -161,7 +162,7 @@ func (r *BrowserReconciler) ensureDeployment(ctx context.Context, browser *brows
 	}
 
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, deploy, func() error {
-		applyDeploymentSpec(deploy, browser, r.DefaultBrowserImage, r.DefaultBrowserPullPolicy, r.RedisURL, r.DefaultBrowserEnv)
+		applyDeploymentSpec(deploy, browser, r.DefaultBrowserImage, r.DefaultBrowserPullPolicy, r.RedisURL, r.DefaultBrowserEnv, r.DefaultBrowserResources)
 		if err := controllerutil.SetControllerReference(browser, deploy, r.Scheme); err != nil {
 			return err
 		}
