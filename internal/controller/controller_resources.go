@@ -67,14 +67,15 @@ func applyControllerDeploymentSpec(deploy *appsv1.Deployment, ctrlCR *browserv1.
 	applyResourcesOverride(requests, limits, defaultRes)
 	applyResourcesOverride(requests, limits, ctrlCR.Spec.Resources)
 
-	// NODE_OPTIONS scales from the pod's memory limit. The controller pod
-	// is Node-only (no Chrome), so up to ~half the limit can safely go to V8.
-	// Last-write-wins, so a user-supplied value in spec.env (or
-	// DEFAULT_CONTROLLER_ENV) still overrides.
+	// NODE_OPTIONS scales from the pod's memory limit unless the user already
+	// provides it in spec.env or DEFAULT_CONTROLLER_ENV, in which case theirs wins.
+	nodeOptionsOverridden := envContains(defaultEnv, "NODE_OPTIONS") || envContains(ctrlCR.Spec.Env, "NODE_OPTIONS")
 	heapMiB := nodeMaxOldSpaceMiB(limits[corev1.ResourceMemory])
 	env := []corev1.EnvVar{
 		{Name: "REDIS_URL", Value: redisURL},
-		{Name: "NODE_OPTIONS", Value: fmt.Sprintf("--max-old-space-size=%d", heapMiB)},
+	}
+	if !nodeOptionsOverridden {
+		env = append(env, corev1.EnvVar{Name: "NODE_OPTIONS", Value: fmt.Sprintf("--max-old-space-size=%d", heapMiB)})
 	}
 	env = append(env, defaultEnv...)
 	if ctrlCR.Spec.MaxPagesPerBrowser != nil {

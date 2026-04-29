@@ -179,13 +179,13 @@ func applyDeploymentSpec(deploy *appsv1.Deployment, browser *browserv1.Browser, 
 						StartupProbe: &corev1.Probe{
 							ProbeHandler: corev1.ProbeHandler{
 								HTTPGet: &corev1.HTTPGetAction{
-									Path: "/browsers",
+									Path: "/health",
 									Port: intstr.FromInt32(int32(launcherPort)),
 								},
 							},
-							InitialDelaySeconds: 5,
-							PeriodSeconds:       5,
-							FailureThreshold:    60,
+							InitialDelaySeconds: 15,
+							PeriodSeconds:       10,
+							FailureThreshold:    30,
 						},
 					},
 				},
@@ -309,6 +309,15 @@ func nodeMaxOldSpaceMiB(memLimit resource.Quantity) int64 {
 
 func int64Ptr(v int64) *int64 {
 	return &v
+}
+
+func envContains(env []corev1.EnvVar, name string) bool {
+	for _, e := range env {
+		if e.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 // isPodReady returns true if all containers in the pod are ready.
