@@ -12,8 +12,7 @@ type BrowserSpec struct {
 	ProfileUID string `json:"profileUid"`
 
 	// Running controls whether the browser workload is up. When false, the Deployment is scaled to zero (PVC retained).
-	// When omitted, defaults to true.
-	// +kubebuilder:default=true
+	// When omitted, the controller treats it as true.
 	// +optional
 	Running *bool `json:"running,omitempty"`
 
