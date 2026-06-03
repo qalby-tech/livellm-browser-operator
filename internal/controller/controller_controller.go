@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -132,31 +133,106 @@ func (r *ControllerReconciler) ensureControllerDeployment(ctx context.Context, c
 	return err
 }
 
-// ensureBrowsersConfigMap writes the {profileUID: wsUrl} registry the controller
-// reads (BROWSERS_CONFIG) — replaces Redis discovery. Browsers are addressed by
-// a deterministic Service ws_url published to Browser.status.wsUrl.
-func (r *ControllerReconciler) ensureBrowsersConfigMap(ctx context.Context, ctrlCR *browserv1.Controller) error {
-	var browsers browserv1.BrowserList
-	listOpts := []client.ListOption{client.InNamespace(ctrlCR.Namespace)}
-	if len(ctrlCR.Spec.BrowserSelector) > 0 {
-		listOpts = append(listOpts, client.MatchingLabels(ctrlCR.Spec.BrowserSelector))
+// parseAuthHeader parses an "Name: value" header string into a single-entry
+// header map. Returns nil for empty/malformed input.
+func parseAuthHeader(h string) map[string]string {
+	h = strings.TrimSpace(h)
+	i := strings.Index(h, ":")
+	if i <= 0 {
+		return nil
 	}
-	if err := r.List(ctx, &browsers, listOpts...); err != nil {
-		return err
+	name := strings.TrimSpace(h[:i])
+	value := strings.TrimSpace(h[i+1:])
+	if name == "" || value == "" {
+		return nil
+	}
+	return map[string]string{name: value}
+}
+
+// collectBrowsers resolves the set of browsers this controller drives:
+//   - autodiscovered in-namespace Browsers (when autodiscover is nil/true),
+//     optionally filtered by browserSelector;
+//   - explicit in-namespace Browsers named in spec.browsers;
+//   - external/BYO browsers from spec.externalBrowsers.
+//
+// It returns the registry entries (id -> ws_url string, or {wsUrl,headers} for
+// BYO with auth) and a parallel RegisteredBrowser list for status.
+func (r *ControllerReconciler) collectBrowsers(ctx context.Context, ctrlCR *browserv1.Controller) (map[string]interface{}, []browserv1.RegisteredBrowser, error) {
+	entries := map[string]interface{}{}
+	registered := make([]browserv1.RegisteredBrowser, 0)
+	seen := map[string]bool{}
+
+	addLocal := func(br *browserv1.Browser) {
+		if br.Status.WsURL == "" {
+			return
+		}
+		id := br.Spec.ProfileUID
+		if id == "" {
+			id = br.Name
+		}
+		if seen[id] {
+			return
+		}
+		seen[id] = true
+		entries[id] = br.Status.WsURL
+		registered = append(registered, browserv1.RegisteredBrowser{
+			Name: br.Name, ProfileUID: id, WsURL: br.Status.WsURL,
+		})
 	}
 
-	entries := map[string]string{}
-	for _, br := range browsers.Items {
-		if br.Status.WsURL == "" {
+	autodiscover := ctrlCR.Spec.Autodiscover == nil || *ctrlCR.Spec.Autodiscover
+	if autodiscover {
+		var browsers browserv1.BrowserList
+		listOpts := []client.ListOption{client.InNamespace(ctrlCR.Namespace)}
+		if len(ctrlCR.Spec.BrowserSelector) > 0 {
+			listOpts = append(listOpts, client.MatchingLabels(ctrlCR.Spec.BrowserSelector))
+		}
+		if err := r.List(ctx, &browsers, listOpts...); err != nil {
+			return nil, nil, err
+		}
+		for i := range browsers.Items {
+			addLocal(&browsers.Items[i])
+		}
+	}
+
+	for _, name := range ctrlCR.Spec.Browsers {
+		var br browserv1.Browser
+		if err := r.Get(ctx, types.NamespacedName{Name: name, Namespace: ctrlCR.Namespace}, &br); err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			return nil, nil, err
+		}
+		addLocal(&br)
+	}
+
+	for _, ext := range ctrlCR.Spec.ExternalBrowsers {
+		if ext.ID == "" || ext.WsURL == "" || seen[ext.ID] {
 			continue
 		}
-		profileUID := br.Spec.ProfileUID
-		if profileUID == "" {
-			profileUID = br.Name
+		seen[ext.ID] = true
+		if h := parseAuthHeader(ext.AuthHeader); len(h) > 0 {
+			entries[ext.ID] = map[string]interface{}{"wsUrl": ext.WsURL, "headers": h}
+		} else {
+			entries[ext.ID] = ext.WsURL
 		}
-		entries[profileUID] = br.Status.WsURL
+		registered = append(registered, browserv1.RegisteredBrowser{
+			Name: ext.ID, ProfileUID: ext.ID, WsURL: ext.WsURL,
+		})
 	}
-	payload, err := json.Marshal(map[string]map[string]string{"browsers": entries})
+
+	return entries, registered, nil
+}
+
+// ensureBrowsersConfigMap writes the browser registry the controller reads
+// (BROWSERS_CONFIG) — replaces Redis discovery. Local browsers are addressed by
+// a deterministic Service ws_url; BYO browsers by their supplied ws endpoint.
+func (r *ControllerReconciler) ensureBrowsersConfigMap(ctx context.Context, ctrlCR *browserv1.Controller) error {
+	entries, _, err := r.collectBrowsers(ctx, ctrlCR)
+	if err != nil {
+		return err
+	}
+	payload, err := json.Marshal(map[string]interface{}{"browsers": entries})
 	if err != nil {
 		return err
 	}
@@ -211,27 +287,10 @@ func (r *ControllerReconciler) reconcileControllerStatus(ctx context.Context, ct
 			"Waiting for controller pod to be ready", nil, 0, 0, controllerRequeuePending)
 	}
 
-	var browsers browserv1.BrowserList
-	listOpts := []client.ListOption{client.InNamespace(ctrlCR.Namespace)}
-	if len(ctrlCR.Spec.BrowserSelector) > 0 {
-		listOpts = append(listOpts, client.MatchingLabels(ctrlCR.Spec.BrowserSelector))
-	}
-	if err := r.List(ctx, &browsers, listOpts...); err != nil {
-		logger.Info("failed to list browsers for status", "error", err)
-	}
-
-	registered := make([]browserv1.RegisteredBrowser, 0)
-	for _, br := range browsers.Items {
-		if br.Status.Phase != browserv1.BrowserPhaseRunning || br.Status.WsURL == "" {
-			continue
-		}
-		profileUID := br.Spec.ProfileUID
-		if profileUID == "" {
-			profileUID = br.Name
-		}
-		registered = append(registered, browserv1.RegisteredBrowser{
-			Name: br.Name, ProfileUID: profileUID, WsURL: br.Status.WsURL,
-		})
+	_, registered, err := r.collectBrowsers(ctx, ctrlCR)
+	if err != nil {
+		logger.Info("failed to collect browsers for status", "error", err)
+		registered = make([]browserv1.RegisteredBrowser, 0)
 	}
 	sort.Slice(registered, func(i, j int) bool { return registered[i].ProfileUID < registered[j].ProfileUID })
 

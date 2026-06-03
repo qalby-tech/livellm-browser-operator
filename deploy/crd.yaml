@@ -388,6 +388,14 @@ spec:
             description: ControllerSpec defines the desired state of a Controller
               deployment.
             properties:
+              autodiscover:
+                description: |-
+                  Autodiscover, when set, controls namespace-wide browser discovery.
+                  nil/true: register every Running Browser in the namespace (optionally
+                  filtered by browserSelector). false: register ONLY the browsers named in
+                  Browsers plus ExternalBrowsers — used for singleton (one browser) and
+                  grouped-manual controllers.
+                type: boolean
               autoscaleBrowser:
                 description: |-
                   AutoscaleBrowser enables automatic creation of new Browser CRs when
@@ -564,6 +572,13 @@ spec:
                   Uses label matching on Browser CRs.
                   If empty, all Running Browser CRs in the same namespace are registered.
                 type: object
+              browsers:
+                description: |-
+                  Browsers is an explicit list of in-namespace Browser CR names to register
+                  with this controller (in addition to any autodiscovered ones).
+                items:
+                  type: string
+                type: array
               env:
                 description: Env is a list of environment variables injected into
                   the controller container.
@@ -681,6 +696,31 @@ spec:
                       type: object
                   required:
                   - name
+                  type: object
+                type: array
+              externalBrowsers:
+                description: |-
+                  ExternalBrowsers are remote/BYO browsers reachable at a user-supplied CDP
+                  websocket endpoint, registered alongside in-cluster Browsers.
+                items:
+                  description: ExternalBrowser is a remote/BYO browser registered
+                    by ws endpoint.
+                  properties:
+                    authHeader:
+                      description: |-
+                        AuthHeader optionally sets one HTTP header sent on the CDP connect, in
+                        "Name: value" form (e.g. "Authorization: Bearer abc"). For providers that
+                        require auth on the websocket handshake.
+                      type: string
+                    id:
+                      description: ID is the browser id used in the X-Browser-Id header.
+                      type: string
+                    wsUrl:
+                      description: WsURL is the CDP websocket endpoint (ws:// or wss://).
+                      type: string
+                  required:
+                  - id
+                  - wsUrl
                   type: object
                 type: array
               image:

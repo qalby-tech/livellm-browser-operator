@@ -27,6 +27,24 @@ type ControllerSpec struct {
 	// +optional
 	BrowserSelector map[string]string `json:"browserSelector,omitempty"`
 
+	// Autodiscover, when set, controls namespace-wide browser discovery.
+	// nil/true: register every Running Browser in the namespace (optionally
+	// filtered by browserSelector). false: register ONLY the browsers named in
+	// Browsers plus ExternalBrowsers — used for singleton (one browser) and
+	// grouped-manual controllers.
+	// +optional
+	Autodiscover *bool `json:"autodiscover,omitempty"`
+
+	// Browsers is an explicit list of in-namespace Browser CR names to register
+	// with this controller (in addition to any autodiscovered ones).
+	// +optional
+	Browsers []string `json:"browsers,omitempty"`
+
+	// ExternalBrowsers are remote/BYO browsers reachable at a user-supplied CDP
+	// websocket endpoint, registered alongside in-cluster Browsers.
+	// +optional
+	ExternalBrowsers []ExternalBrowser `json:"externalBrowsers,omitempty"`
+
 	// Env is a list of environment variables injected into the controller container.
 	// +optional
 	Env []corev1.EnvVar `json:"env,omitempty"`
@@ -51,6 +69,19 @@ type ControllerSpec struct {
 	// browserSelector).  At a minimum, profileUid is generated automatically.
 	// +optional
 	AutoscaleBrowserTemplate *AutoscaleBrowserTemplateSpec `json:"autoscaleBrowserTemplate,omitempty"`
+}
+
+// ExternalBrowser is a remote/BYO browser registered by ws endpoint.
+type ExternalBrowser struct {
+	// ID is the browser id used in the X-Browser-Id header.
+	ID string `json:"id"`
+	// WsURL is the CDP websocket endpoint (ws:// or wss://).
+	WsURL string `json:"wsUrl"`
+	// AuthHeader optionally sets one HTTP header sent on the CDP connect, in
+	// "Name: value" form (e.g. "Authorization: Bearer abc"). For providers that
+	// require auth on the websocket handshake.
+	// +optional
+	AuthHeader string `json:"authHeader,omitempty"`
 }
 
 // AutoscaleBrowserTemplateSpec is the template for browser CRs created by autoscaling.
