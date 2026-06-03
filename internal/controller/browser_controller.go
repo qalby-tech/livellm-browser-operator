@@ -2,7 +2,6 @@ package controller
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"time"
 
@@ -36,12 +35,10 @@ const (
 type BrowserReconciler struct {
 	client.Client
 	Scheme                   *runtime.Scheme
-	RedisState               *RedisState
 	DefaultBrowserImage      string
 	DefaultBrowserPullPolicy string
 	DefaultBrowserEnv        []corev1.EnvVar
 	DefaultBrowserResources  *browserv1.ResourcesSpec
-	RedisURL                 string
 }
 
 // SetupWithManager registers the reconciler with the manager.
@@ -162,7 +159,7 @@ func (r *BrowserReconciler) ensureDeployment(ctx context.Context, browser *brows
 	}
 
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, deploy, func() error {
-		applyDeploymentSpec(deploy, browser, r.DefaultBrowserImage, r.DefaultBrowserPullPolicy, r.RedisURL, r.DefaultBrowserEnv, r.DefaultBrowserResources)
+		applyDeploymentSpec(deploy, browser, r.DefaultBrowserImage, r.DefaultBrowserPullPolicy, r.DefaultBrowserEnv, r.DefaultBrowserResources)
 		if err := controllerutil.SetControllerReference(browser, deploy, r.Scheme); err != nil {
 			return err
 		}
@@ -278,63 +275,26 @@ func (r *BrowserReconciler) setStatus(
 }
 
 // ────────────────────────────────────────────────────────────
-// Redis-based state management (replaces HTTP calls)
+// Deterministic state (no discovery service)
 // ────────────────────────────────────────────────────────────
 
 func (r *BrowserReconciler) reconcileBrowserState(ctx context.Context, browser *browserv1.Browser, readyPod *corev1.Pod, profileUID string) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
-	// Read cookies from ConfigMap/Secret if specified
-	var cookies []map[string]interface{}
-	if browser.Spec.Cookies != nil {
-		var cookieErr error
-		cookies, cookieErr = r.readCookies(ctx, browser)
-		if cookieErr != nil {
-			logger.Error(cookieErr, "failed to read cookies source")
-		}
-	}
+	// One browser per pod with a fixed CDP proxy port fronted by a stable
+	// Service — so the CDP ws_url is deterministic and never drifts. The
+	// in-pod proxy rewrites the ws path across Chrome restarts and the Service
+	// keeps a stable DNS name across pod restarts. No Redis, no discovery.
+	wsURL := fmt.Sprintf("ws://%s.%s.svc.cluster.local:%d/devtools/browser/%s",
+		browser.Name, browser.Namespace, cdpPort, profileUID)
 
-	// Write desired state (extensions, cookies, proxy) to Redis so the browser pod picks it up
-	var desiredProxy *DesiredProxy
-	if browser.Spec.Proxy != nil {
-		desiredProxy = &DesiredProxy{
-			Server:   browser.Spec.Proxy.Server,
-			Username: browser.Spec.Proxy.Username,
-			Password: browser.Spec.Proxy.Password,
-			Bypass:   browser.Spec.Proxy.Bypass,
-		}
-	}
-	desired := &DesiredBrowserState{
-		Extensions: browser.Spec.Extensions,
-		Cookies:    cookies,
-		Proxy:      desiredProxy,
-	}
-	if err := r.RedisState.SetDesiredBrowserState(ctx, profileUID, desired); err != nil {
-		logger.Error(err, "failed to write desired state to Redis")
-	}
-
-	// Read browser state from Redis
-	state, err := r.RedisState.GetBrowserState(ctx, profileUID)
-	if err != nil {
-		logger.Error(err, "failed to read browser state from Redis")
-		return r.setStatus(ctx, browser, browserv1.BrowserPhaseCreating, "Waiting for browser to publish state", requeuePending)
-	}
-	if state == nil || state.WsURL == "" {
-		return r.setStatus(ctx, browser, browserv1.BrowserPhaseCreating, "Waiting for browser to publish state", requeuePending)
-	}
-
-	podIP := readyPod.Status.PodIP
-
-	wsURL := state.WsURL
-	if state.CDPPort > 0 {
-		wsURL = fmt.Sprintf("ws://%s:%d/devtools/browser/%s", podIP, state.CDPPort, profileUID)
-	}
-
-	if browser.Status.Phase != browserv1.BrowserPhaseRunning || browser.Status.WsURL != wsURL {
+	if browser.Status.Phase != browserv1.BrowserPhaseRunning ||
+		browser.Status.WsURL != wsURL ||
+		browser.Status.PodName != readyPod.Name {
 		browser.Status.Phase = browserv1.BrowserPhaseRunning
 		browser.Status.PodName = readyPod.Name
-		browser.Status.PodIP = podIP
-		browser.Status.CdpPort = state.CDPPort
+		browser.Status.PodIP = readyPod.Status.PodIP
+		browser.Status.CdpPort = cdpPort
 		browser.Status.WsURL = wsURL
 		browser.Status.Message = "Browser is ready"
 
@@ -348,52 +308,4 @@ func (r *BrowserReconciler) reconcileBrowserState(ctx context.Context, browser *
 	}
 
 	return ctrl.Result{RequeueAfter: requeueReady}, nil
-}
-
-// readCookies loads cookies JSON from a ConfigMap or Secret referenced by the Browser spec.
-func (r *BrowserReconciler) readCookies(ctx context.Context, browser *browserv1.Browser) ([]map[string]interface{}, error) {
-	ref := browser.Spec.Cookies
-	if ref == nil {
-		return nil, nil
-	}
-
-	var raw string
-
-	switch {
-	case ref.ConfigMapRef != nil:
-		var cm corev1.ConfigMap
-		if err := r.Get(ctx, types.NamespacedName{
-			Name: ref.ConfigMapRef.Name, Namespace: browser.Namespace,
-		}, &cm); err != nil {
-			return nil, fmt.Errorf("get configmap %s: %w", ref.ConfigMapRef.Name, err)
-		}
-		key := ref.ConfigMapRef.Key
-		if key == "" {
-			key = "cookies.json"
-		}
-		raw = cm.Data[key]
-
-	case ref.SecretRef != nil:
-		var secret corev1.Secret
-		if err := r.Get(ctx, types.NamespacedName{
-			Name: ref.SecretRef.Name, Namespace: browser.Namespace,
-		}, &secret); err != nil {
-			return nil, fmt.Errorf("get secret %s: %w", ref.SecretRef.Name, err)
-		}
-		key := ref.SecretRef.Key
-		if key == "" {
-			key = "cookies.json"
-		}
-		raw = string(secret.Data[key])
-	}
-
-	if raw == "" {
-		return nil, nil
-	}
-
-	var cookies []map[string]interface{}
-	if err := json.Unmarshal([]byte(raw), &cookies); err != nil {
-		return nil, fmt.Errorf("parse cookies JSON: %w", err)
-	}
-	return cookies, nil
 }

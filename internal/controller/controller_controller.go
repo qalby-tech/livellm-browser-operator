@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"time"
@@ -26,17 +27,24 @@ const (
 	controllerRequeueReady   = 60 * time.Second
 	controllerRequeuePending = 10 * time.Second
 	controllerRequeueRetry   = 5 * time.Second
+
+	// browsersConfigFile is the key/filename of the browser registry the
+	// controller reads (mounted at /etc/livellm/<browsersConfigFile>).
+	browsersConfigFile = "browsers.json"
 )
+
+// browsersConfigMapName is the per-Controller ConfigMap holding the browser registry.
+func browsersConfigMapName(controllerName string) string {
+	return controllerName + "-browsers"
+}
 
 type ControllerReconciler struct {
 	client.Client
 	Scheme                      *runtime.Scheme
-	RedisState                  *RedisState
 	DefaultControllerImage      string
 	DefaultControllerPullPolicy string
 	DefaultControllerEnv        []corev1.EnvVar
 	DefaultControllerResources  *browserv1.ResourcesSpec
-	RedisURL                    string
 	DefaultBrowserImage         string
 	DefaultBrowserPullPolicy    string
 	DefaultBrowserEnv           []corev1.EnvVar
@@ -84,6 +92,12 @@ func (r *ControllerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		}
 	}
 
+	// Write the browser registry ConfigMap first so it exists before the
+	// controller pod mounts it.
+	if err := r.ensureBrowsersConfigMap(ctx, &ctrlCR); err != nil {
+		logger.Error(err, "failed to ensure browsers ConfigMap")
+		return ctrl.Result{RequeueAfter: controllerRequeueRetry}, nil
+	}
 	if err := r.ensureControllerDeployment(ctx, &ctrlCR); err != nil {
 		logger.Error(err, "failed to ensure controller Deployment")
 		return ctrl.Result{RequeueAfter: controllerRequeueRetry}, nil
@@ -112,8 +126,51 @@ func (r *ControllerReconciler) ensureControllerDeployment(ctx context.Context, c
 		ObjectMeta: metav1.ObjectMeta{Name: ctrlCR.Name, Namespace: ctrlCR.Namespace},
 	}
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, deploy, func() error {
-		applyControllerDeploymentSpec(deploy, ctrlCR, r.DefaultControllerImage, r.DefaultControllerPullPolicy, r.RedisURL, r.DefaultControllerEnv, r.DefaultControllerResources)
+		applyControllerDeploymentSpec(deploy, ctrlCR, r.DefaultControllerImage, r.DefaultControllerPullPolicy, r.DefaultControllerEnv, r.DefaultControllerResources)
 		return controllerutil.SetControllerReference(ctrlCR, deploy, r.Scheme)
+	})
+	return err
+}
+
+// ensureBrowsersConfigMap writes the {profileUID: wsUrl} registry the controller
+// reads (BROWSERS_CONFIG) — replaces Redis discovery. Browsers are addressed by
+// a deterministic Service ws_url published to Browser.status.wsUrl.
+func (r *ControllerReconciler) ensureBrowsersConfigMap(ctx context.Context, ctrlCR *browserv1.Controller) error {
+	var browsers browserv1.BrowserList
+	listOpts := []client.ListOption{client.InNamespace(ctrlCR.Namespace)}
+	if len(ctrlCR.Spec.BrowserSelector) > 0 {
+		listOpts = append(listOpts, client.MatchingLabels(ctrlCR.Spec.BrowserSelector))
+	}
+	if err := r.List(ctx, &browsers, listOpts...); err != nil {
+		return err
+	}
+
+	entries := map[string]string{}
+	for _, br := range browsers.Items {
+		if br.Status.WsURL == "" {
+			continue
+		}
+		profileUID := br.Spec.ProfileUID
+		if profileUID == "" {
+			profileUID = br.Name
+		}
+		entries[profileUID] = br.Status.WsURL
+	}
+	payload, err := json.Marshal(map[string]map[string]string{"browsers": entries})
+	if err != nil {
+		return err
+	}
+
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      browsersConfigMapName(ctrlCR.Name),
+			Namespace: ctrlCR.Namespace,
+		},
+	}
+	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, cm, func() error {
+		cm.Labels = controllerLabels(ctrlCR.Name)
+		cm.Data = map[string]string{browsersConfigFile: string(payload)}
+		return controllerutil.SetControllerReference(ctrlCR, cm, r.Scheme)
 	})
 	return err
 }
@@ -178,13 +235,9 @@ func (r *ControllerReconciler) reconcileControllerStatus(ctx context.Context, ct
 	}
 	sort.Slice(registered, func(i, j int) bool { return registered[i].ProfileUID < registered[j].ProfileUID })
 
-	pageCounts := make(map[string]int)
-	controllerStates, err := r.RedisState.GetControllerBrowserStates(ctx)
-	if err == nil && controllerStates != nil {
-		for bid, state := range controllerStates {
-			pageCounts[bid] = state.SessionCount
-		}
-	}
+	// Per-browser page counts come from the controller's own HTTP API now
+	// (best-effort; empty when the controller isn't ready or has no sessions).
+	pageCounts := fetchControllerPageCounts(ctx, ctrlCR.Name, ctrlCR.Namespace)
 
 	totalPages := 0
 	for i := range registered {
@@ -202,7 +255,7 @@ func (r *ControllerReconciler) reconcileControllerStatus(ctx context.Context, ct
 	}
 
 	return r.setControllerStatus(ctx, ctrlCR, browserv1.ControllerPhaseRunning,
-		"Controller is ready (browsers discovered via Redis)", registered, totalPages, autoscaledCount, controllerRequeueReady)
+		"Controller is ready", registered, totalPages, autoscaledCount, controllerRequeueReady)
 }
 
 func (r *ControllerReconciler) setControllerStatus(
@@ -298,7 +351,7 @@ func (r *ControllerReconciler) autoscaleBrowsers(
 			},
 		},
 		Spec: browserv1.BrowserSpec{
-			ProfileUID:   profileUID,
+			ProfileUID:    profileUID,
 			ReclaimPolicy: "Delete",
 		},
 	}

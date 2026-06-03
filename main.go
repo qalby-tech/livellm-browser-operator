@@ -81,7 +81,6 @@ func main() {
 	defaultControllerImage := os.Getenv("DEFAULT_CONTROLLER_IMAGE")
 	defaultBrowserPullPolicy := os.Getenv("DEFAULT_BROWSER_PULL_POLICY")
 	defaultControllerPullPolicy := os.Getenv("DEFAULT_CONTROLLER_PULL_POLICY")
-	redisURL := os.Getenv("REDIS_URL")
 	if defaultBrowserImage != "" {
 		setupLog.Info("default browser image overridden", "image", defaultBrowserImage)
 	}
@@ -94,15 +93,6 @@ func main() {
 	if defaultControllerPullPolicy != "" {
 		setupLog.Info("default controller pull policy configured", "pullPolicy", defaultControllerPullPolicy)
 	}
-	if redisURL != "" {
-		setupLog.Info("redis URL configured", "url", redisURL)
-	}
-
-	redisState, err := controller.NewRedisState(redisURL)
-	if err != nil {
-		setupLog.Error(err, "unable to connect to Redis")
-		os.Exit(1)
-	}
 
 	defaultBrowserEnv := parseEnvVars("DEFAULT_BROWSER_ENV")
 	defaultControllerEnv := parseEnvVars("DEFAULT_CONTROLLER_ENV")
@@ -112,12 +102,10 @@ func main() {
 	browserReconciler := &controller.BrowserReconciler{
 		Client:                   mgr.GetClient(),
 		Scheme:                   mgr.GetScheme(),
-		RedisState:               redisState,
 		DefaultBrowserImage:      defaultBrowserImage,
 		DefaultBrowserPullPolicy: defaultBrowserPullPolicy,
 		DefaultBrowserEnv:        defaultBrowserEnv,
 		DefaultBrowserResources:  defaultBrowserResources,
-		RedisURL:                 redisURL,
 	}
 	if err := browserReconciler.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Browser")
@@ -127,12 +115,10 @@ func main() {
 	controllerReconciler := &controller.ControllerReconciler{
 		Client:                      mgr.GetClient(),
 		Scheme:                      mgr.GetScheme(),
-		RedisState:                  redisState,
 		DefaultControllerImage:      defaultControllerImage,
 		DefaultControllerPullPolicy: defaultControllerPullPolicy,
 		DefaultControllerEnv:        defaultControllerEnv,
 		DefaultControllerResources:  defaultControllerResources,
-		RedisURL:                    redisURL,
 		DefaultBrowserImage:         defaultBrowserImage,
 		DefaultBrowserPullPolicy:    defaultBrowserPullPolicy,
 		DefaultBrowserEnv:           defaultBrowserEnv,

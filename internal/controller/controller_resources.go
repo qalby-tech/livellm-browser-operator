@@ -15,6 +15,7 @@ import (
 const (
 	controllerPort         = 8000
 	defaultControllerImage = "kamasalyamov/livellm-browser:controller-2.0.1"
+	browsersConfigMountDir = "/etc/livellm"
 )
 
 func controllerLabels(name string) map[string]string {
@@ -36,7 +37,7 @@ func controllerSelectorLabels(name string) map[string]string {
 // Controller Deployment
 // ────────────────────────────────────────────────────────────
 
-func applyControllerDeploymentSpec(deploy *appsv1.Deployment, ctrlCR *browserv1.Controller, defaultImg string, pullPolicy string, redisURL string, defaultEnv []corev1.EnvVar, defaultRes *browserv1.ResourcesSpec) {
+func applyControllerDeploymentSpec(deploy *appsv1.Deployment, ctrlCR *browserv1.Controller, defaultImg string, pullPolicy string, defaultEnv []corev1.EnvVar, defaultRes *browserv1.ResourcesSpec) {
 	if defaultImg == "" {
 		defaultImg = defaultControllerImage
 	}
@@ -72,7 +73,7 @@ func applyControllerDeploymentSpec(deploy *appsv1.Deployment, ctrlCR *browserv1.
 	nodeOptionsOverridden := envContains(defaultEnv, "NODE_OPTIONS") || envContains(ctrlCR.Spec.Env, "NODE_OPTIONS")
 	heapMiB := nodeMaxOldSpaceMiB(limits[corev1.ResourceMemory])
 	env := []corev1.EnvVar{
-		{Name: "REDIS_URL", Value: redisURL},
+		{Name: "BROWSERS_CONFIG", Value: browsersConfigMountDir + "/" + browsersConfigFile},
 	}
 	if !nodeOptionsOverridden {
 		env = append(env, corev1.EnvVar{Name: "NODE_OPTIONS", Value: fmt.Sprintf("--max-old-space-size=%d", heapMiB)})
@@ -106,6 +107,9 @@ func applyControllerDeploymentSpec(deploy *appsv1.Deployment, ctrlCR *browserv1.
 						Resources: corev1.ResourceRequirements{
 							Requests: requests,
 							Limits:   limits,
+						},
+						VolumeMounts: []corev1.VolumeMount{
+							{Name: "browsers-config", MountPath: browsersConfigMountDir, ReadOnly: true},
 						},
 						ReadinessProbe: &corev1.Probe{
 							ProbeHandler: corev1.ProbeHandler{
@@ -143,6 +147,18 @@ func applyControllerDeploymentSpec(deploy *appsv1.Deployment, ctrlCR *browserv1.
 							FailureThreshold:    30,
 						},
 					},
+				},
+			},
+		},
+	}
+
+	deploy.Spec.Template.Spec.Volumes = []corev1.Volume{
+		{
+			Name: "browsers-config",
+			VolumeSource: corev1.VolumeSource{
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{Name: browsersConfigMapName(ctrlCR.Name)},
+					Optional:             boolPtr(true),
 				},
 			},
 		},

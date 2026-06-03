@@ -110,8 +110,10 @@ spec:
 ### Connecting the controller
 
 Deploy a `Controller` CR (same namespace as your browsers). The operator creates
-the controller workload, which discovers browsers via Redis (`livellm:browsers`)
-and reconciles drift on a 10-second sync loop. See `deploy/examples/controller.yaml`.
+the controller workload and writes a `<controller>-browsers` ConfigMap mapping
+each ready browser's `profileUid` to its deterministic Service ws_url; the
+controller mounts it at `BROWSERS_CONFIG` and resolves `X-Browser-Id` against it.
+No Redis. See `deploy/examples/controller.yaml`.
 
 ### Tuning the Node.js heap
 
@@ -141,12 +143,13 @@ the operator as `DEFAULT_BROWSER_RESOURCES` / `DEFAULT_CONTROLLER_RESOURCES`).
 Precedence on each pod: the CR's `spec.resources` wins → chart default →
 operator built-in fallback.
 
-### Desired state via Redis
+### Desired state (declarative)
 
-The operator writes a per-browser desired state to Redis (`livellm:desired:browsers`)
-containing `extensions`, `cookies`, and `proxy`. The browser pod polls every 10s
-and applies any drift through a profile-preserving Chrome restart. Adding extensions,
-rotating cookies, or changing proxy at runtime is therefore non-destructive.
+The operator passes a browser's `extensions` and `proxy` to its pod as env, and
+mounts the `cookies` ConfigMap/Secret as a file (`BROWSER_COOKIES_FILE`); the
+browser applies them to the default browser at startup. Changing extensions,
+cookies, or proxy updates the pod spec and rolls the browser — there is no
+runtime Redis channel.
 
 ---
 

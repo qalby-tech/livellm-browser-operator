@@ -51,10 +51,15 @@ rules:
     resources: ["persistentvolumeclaims"]
     verbs: ["get", "list", "watch", "create", "delete"]
 
-  # ConfigMap + Secret read access (for cookies injection)
+  # Secret read access (cookies source mounted into browser pods)
   - apiGroups: [""]
-    resources: ["configmaps", "secrets"]
+    resources: ["secrets"]
     verbs: ["get", "list", "watch"]
+
+  # ConfigMaps: read (cookies source) + write (per-Controller browser registry)
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 
   # Events
   - apiGroups: [""]
