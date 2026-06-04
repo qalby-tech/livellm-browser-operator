@@ -226,6 +226,15 @@ spec:
                   Image overrides the browser container image.
                   If empty, the operator uses its configured default (DEFAULT_BROWSER_IMAGE env var).
                 type: string
+              podLabels:
+                additionalProperties:
+                  type: string
+                description: |-
+                  PodLabels are extra labels stamped onto the workload pods (not the
+                  Deployment or the selector). General-purpose passthrough — e.g. set
+                  istio.io/dataplane-mode=none to keep a pod out of the ambient mesh, or a
+                  marker label whose change forces a clean rollout. Empty by default.
+                type: object
               profileUid:
                 description: |-
                   ProfileUID is the unique profile identifier used as browser_id in the controller.
@@ -737,6 +746,15 @@ spec:
                   Defaults to 50 when autoscaleBrowser is true.
                 format: int32
                 type: integer
+              podLabels:
+                additionalProperties:
+                  type: string
+                description: |-
+                  PodLabels are extra labels stamped onto the controller pods (not the
+                  Deployment or the selector). General-purpose passthrough — e.g. set
+                  istio.io/dataplane-mode=none to keep a pod out of the ambient mesh, or a
+                  marker label whose change forces a clean rollout. Empty by default.
+                type: object
               replicas:
                 default: 1
                 description: Replicas is the number of controller pod replicas.

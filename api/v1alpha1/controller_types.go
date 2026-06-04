@@ -69,6 +69,13 @@ type ControllerSpec struct {
 	// browserSelector).  At a minimum, profileUid is generated automatically.
 	// +optional
 	AutoscaleBrowserTemplate *AutoscaleBrowserTemplateSpec `json:"autoscaleBrowserTemplate,omitempty"`
+
+	// PodLabels are extra labels stamped onto the controller pods (not the
+	// Deployment or the selector). General-purpose passthrough — e.g. set
+	// istio.io/dataplane-mode=none to keep a pod out of the ambient mesh, or a
+	// marker label whose change forces a clean rollout. Empty by default.
+	// +optional
+	PodLabels map[string]string `json:"podLabels,omitempty"`
 }
 
 // ExternalBrowser is a remote/BYO browser registered by ws endpoint.

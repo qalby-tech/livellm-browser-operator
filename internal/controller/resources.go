@@ -41,6 +41,20 @@ func labels(name string) map[string]string {
 }
 
 // selectorLabels returns the minimal labels used by Deployment selector & Service.
+// mergePodLabels returns a copy of base with extra merged on top. Used for the
+// pod template only (never the Deployment metadata or the immutable selector),
+// so a Browser/Controller spec.podLabels change rolls the pods cleanly.
+func mergePodLabels(base, extra map[string]string) map[string]string {
+	out := make(map[string]string, len(base)+len(extra))
+	for k, v := range base {
+		out[k] = v
+	}
+	for k, v := range extra {
+		out[k] = v
+	}
+	return out
+}
+
 func selectorLabels(name string) map[string]string {
 	return map[string]string{
 		"livellm.io/browser": name,
@@ -159,7 +173,7 @@ func applyDeploymentSpec(deploy *appsv1.Deployment, browser *browserv1.Browser, 
 		Strategy: appsv1.DeploymentStrategy{Type: appsv1.RecreateDeploymentStrategyType},
 		Selector: &metav1.LabelSelector{MatchLabels: sel},
 		Template: corev1.PodTemplateSpec{
-			ObjectMeta: metav1.ObjectMeta{Labels: lbls},
+			ObjectMeta: metav1.ObjectMeta{Labels: mergePodLabels(lbls, browser.Spec.PodLabels)},
 			Spec: corev1.PodSpec{
 				SecurityContext: &corev1.PodSecurityContext{
 					RunAsUser:  int64Ptr(headlessUID),

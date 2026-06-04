@@ -60,6 +60,13 @@ type BrowserSpec struct {
 	// Env is a list of environment variables injected into the browser container.
 	// +optional
 	Env []corev1.EnvVar `json:"env,omitempty"`
+
+	// PodLabels are extra labels stamped onto the workload pods (not the
+	// Deployment or the selector). General-purpose passthrough — e.g. set
+	// istio.io/dataplane-mode=none to keep a pod out of the ambient mesh, or a
+	// marker label whose change forces a clean rollout. Empty by default.
+	// +optional
+	PodLabels map[string]string `json:"podLabels,omitempty"`
 }
 
 // CookiesSource references a ConfigMap or Secret containing a JSON array of cookies.
