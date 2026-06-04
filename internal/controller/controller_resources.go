@@ -93,7 +93,7 @@ func applyControllerDeploymentSpec(deploy *appsv1.Deployment, ctrlCR *browserv1.
 		Strategy: appsv1.DeploymentStrategy{Type: appsv1.RollingUpdateDeploymentStrategyType},
 		Selector: &metav1.LabelSelector{MatchLabels: sel},
 		Template: corev1.PodTemplateSpec{
-			ObjectMeta: metav1.ObjectMeta{Labels: withAmbientOptOut(lbls)},
+			ObjectMeta: metav1.ObjectMeta{Labels: lbls},
 			Spec: corev1.PodSpec{
 				Containers: []corev1.Container{
 					{

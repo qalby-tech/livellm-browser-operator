@@ -41,21 +41,6 @@ func labels(name string) map[string]string {
 }
 
 // selectorLabels returns the minimal labels used by Deployment selector & Service.
-// withAmbientOptOut copies m and adds the Istio ambient opt-out label. Browser
-// and controller pods expose kubelet HTTP health probes (/health, /parser/ping);
-// when ztunnel captures the pod under ambient those probes time out (the ambient
-// health-probe bypass isn't reaching these pods on the Cilium kube-proxy-
-// replacement stack) and the kubelet kills the pod. Keep these pods out of the
-// mesh until that's fixed. The label is a no-op in namespaces not in the mesh.
-func withAmbientOptOut(m map[string]string) map[string]string {
-	out := make(map[string]string, len(m)+1)
-	for k, v := range m {
-		out[k] = v
-	}
-	out["istio.io/dataplane-mode"] = "none"
-	return out
-}
-
 func selectorLabels(name string) map[string]string {
 	return map[string]string{
 		"livellm.io/browser": name,
@@ -174,7 +159,7 @@ func applyDeploymentSpec(deploy *appsv1.Deployment, browser *browserv1.Browser, 
 		Strategy: appsv1.DeploymentStrategy{Type: appsv1.RecreateDeploymentStrategyType},
 		Selector: &metav1.LabelSelector{MatchLabels: sel},
 		Template: corev1.PodTemplateSpec{
-			ObjectMeta: metav1.ObjectMeta{Labels: withAmbientOptOut(lbls)},
+			ObjectMeta: metav1.ObjectMeta{Labels: lbls},
 			Spec: corev1.PodSpec{
 				SecurityContext: &corev1.PodSecurityContext{
 					RunAsUser:  int64Ptr(headlessUID),
