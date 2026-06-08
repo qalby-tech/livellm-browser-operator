@@ -1,0 +1,49 @@
+# Example: an agent that drives a single Browser directly (plain CDP, no controller).
+apiVersion: livellm.io/v1alpha1
+kind: BrowserAgent
+metadata:
+  name: my-agent
+  namespace: default
+spec:
+  target:
+    # plain CDP to this Browser CR's status.wsUrl
+    browserRef: my-browser
+  model:
+    # the tenant's own AI provider — REQUIRED (no implicit default; the agent
+    # refuses the task with model_not_configured if this can't resolve).
+    provider: anthropic            # anthropic | openai | openai-compatible | google
+    name: claude-sonnet-4-5
+    apiKeySecret:
+      name: my-agent-model
+      key: api_key
+  control:
+    url: wss://gateway.example.com/agent/my-agent
+    tokenSecret:
+      name: my-agent-control
+      key: token
+  artifacts:
+    endpoint: http://minio.minio:9000
+    bucket: browser-agent
+    accessKeySecret: { name: my-agent-artifacts, key: access_key }
+    secretKeySecret: { name: my-agent-artifacts, key: secret_key }
+  recording:
+    enabled: true
+  # private image → pull secret
+  # imagePullSecrets: [docker-registry]
+
+---
+# Example: an agent that drives a browser VIA a Controller, gaining the
+# controller's search/content/interact/attribute endpoints as agent tools.
+apiVersion: livellm.io/v1alpha1
+kind: BrowserAgent
+metadata:
+  name: my-agent-via-controller
+  namespace: default
+spec:
+  target:
+    controllerRef: my-controller
+    browserId: default            # which registered browser_id to drive
+  model:
+    provider: openai
+    name: gpt-4o
+    apiKeySecret: { name: my-agent-model, key: api_key }

@@ -45,7 +45,11 @@ manifests: controller-gen
 		echo "---" >> deploy/crd.yaml; \
 		cat deploy/livellm.io_controllers.yaml >> deploy/crd.yaml; \
 	fi
-	@rm -f deploy/livellm.io_browsers.yaml deploy/livellm.io_controllers.yaml
+	@if [ -f deploy/livellm.io_browseragents.yaml ]; then \
+		echo "---" >> deploy/crd.yaml; \
+		cat deploy/livellm.io_browseragents.yaml >> deploy/crd.yaml; \
+	fi
+	@rm -f deploy/livellm.io_browsers.yaml deploy/livellm.io_controllers.yaml deploy/livellm.io_browseragents.yaml
 
 # Shorthand: regenerate everything
 gen: generate manifests

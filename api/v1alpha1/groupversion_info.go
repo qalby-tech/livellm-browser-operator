@@ -23,4 +23,5 @@ var (
 func init() {
 	SchemeBuilder.Register(&Browser{}, &BrowserList{})
 	SchemeBuilder.Register(&Controller{}, &ControllerList{})
+	SchemeBuilder.Register(&BrowserAgent{}, &BrowserAgentList{})
 }
