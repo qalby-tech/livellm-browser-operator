@@ -378,25 +378,34 @@ func applyResourcesOverride(requests, limits corev1.ResourceList, override *brow
 	}
 }
 
-// nodeMaxOldSpaceMiB returns min(memLimit/2, 4096) MiB, floored at 512 MiB.
-// Used to size --max-old-space-size for the Node-only controller pod.
+// nodeMaxOldSpaceMiB sizes --max-old-space-size for the controller's Node
+// driver: max(limit/2, limit − 2 GiB) clamped to [512, 8192] MiB. Small pods
+// keep the historical half-split; large pods hand most of the memory to the
+// driver (the component that actually OOMs under load) while ~2 GiB stays
+// reserved for the Python server and process overhead.
 func nodeMaxOldSpaceMiB(memLimit resource.Quantity) int64 {
 	const (
-		hardCapMiB = int64(4096)
-		floorMiB   = int64(512)
+		hardCapMiB  = int64(8192)
+		floorMiB    = int64(512)
+		reservedMiB = int64(2048)
+		unknownMiB  = int64(4096)
 	)
 	bytes := memLimit.Value()
 	if bytes <= 0 {
+		return unknownMiB
+	}
+	limitMiB := bytes / (1024 * 1024)
+	heapMiB := limitMiB / 2
+	if v := limitMiB - reservedMiB; v > heapMiB {
+		heapMiB = v
+	}
+	if heapMiB > hardCapMiB {
 		return hardCapMiB
 	}
-	halfMiB := bytes / (2 * 1024 * 1024)
-	if halfMiB > hardCapMiB {
-		return hardCapMiB
-	}
-	if halfMiB < floorMiB {
+	if heapMiB < floorMiB {
 		return floorMiB
 	}
-	return halfMiB
+	return heapMiB
 }
 
 func int64Ptr(v int64) *int64 {
