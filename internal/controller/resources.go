@@ -250,6 +250,13 @@ func applyServiceSpec(svc *corev1.Service, browser *browserv1.Browser) {
 	sel := selectorLabels(browser.Name)
 
 	svc.Labels = lbls
+	// The CDP endpoint behind this Service is a byte-level proxy that rewrites
+	// the Host header out of the FIRST read only. The ambient waypoint's L7
+	// handling re-frames requests in a way that rewrite misses, so Chrome sees
+	// the raw Host and rejects it with its DNS-rebinding 500 — while plain L4
+	// (ztunnel, pod IP) passes clean. Opt the Service out of the waypoint:
+	// CDP/VNC are not user HTTP and lose nothing but broken framing.
+	svc.Labels["istio.io/use-waypoint"] = "none"
 	svc.Spec = corev1.ServiceSpec{
 		Selector: sel,
 		Type:     corev1.ServiceTypeClusterIP,
