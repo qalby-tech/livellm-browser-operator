@@ -94,18 +94,10 @@ func main() {
 		setupLog.Info("default controller pull policy configured", "pullPolicy", defaultControllerPullPolicy)
 	}
 
-	defaultAgentImage := os.Getenv("DEFAULT_AGENT_IMAGE")
-	defaultAgentPullPolicy := os.Getenv("DEFAULT_AGENT_PULL_POLICY")
-	if defaultAgentImage != "" {
-		setupLog.Info("default agent image overridden", "image", defaultAgentImage)
-	}
-
 	defaultBrowserEnv := parseEnvVars("DEFAULT_BROWSER_ENV")
 	defaultControllerEnv := parseEnvVars("DEFAULT_CONTROLLER_ENV")
-	defaultAgentEnv := parseEnvVars("DEFAULT_AGENT_ENV")
 	defaultBrowserResources := parseResources("DEFAULT_BROWSER_RESOURCES")
 	defaultControllerResources := parseResources("DEFAULT_CONTROLLER_RESOURCES")
-	defaultAgentResources := parseResources("DEFAULT_AGENT_RESOURCES")
 
 	browserReconciler := &controller.BrowserReconciler{
 		Client:                   mgr.GetClient(),
@@ -133,19 +125,6 @@ func main() {
 	}
 	if err := controllerReconciler.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Controller")
-		os.Exit(1)
-	}
-
-	agentReconciler := &controller.BrowserAgentReconciler{
-		Client:                 mgr.GetClient(),
-		Scheme:                 mgr.GetScheme(),
-		DefaultAgentImage:      defaultAgentImage,
-		DefaultAgentPullPolicy: defaultAgentPullPolicy,
-		DefaultAgentEnv:        defaultAgentEnv,
-		DefaultAgentResources:  defaultAgentResources,
-	}
-	if err := agentReconciler.SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "BrowserAgent")
 		os.Exit(1)
 	}
 

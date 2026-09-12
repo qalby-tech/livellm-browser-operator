@@ -31,17 +31,6 @@ rules:
     resources: ["controllers/finalizers"]
     verbs: ["update"]
 
-  # BrowserAgent CRD access
-  - apiGroups: ["livellm.io"]
-    resources: ["browseragents"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  - apiGroups: ["livellm.io"]
-    resources: ["browseragents/status"]
-    verbs: ["get", "update", "patch"]
-  - apiGroups: ["livellm.io"]
-    resources: ["browseragents/finalizers"]
-    verbs: ["update"]
-
   # Pod management (for listing/checking status)
   - apiGroups: [""]
     resources: ["pods"]
