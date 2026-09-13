@@ -233,15 +233,11 @@ func (r *BrowserReconciler) reconcileStoppedStatus(ctx context.Context, browser 
 	if browser.Status.Phase != browserv1.BrowserPhaseStopped ||
 		browser.Status.Message != msg ||
 		browser.Status.PodName != "" ||
-		browser.Status.PodIP != "" ||
-		browser.Status.CdpPort != 0 ||
 		browser.Status.WsURL != "" {
 
 		browser.Status.Phase = browserv1.BrowserPhaseStopped
 		browser.Status.Message = msg
 		browser.Status.PodName = ""
-		browser.Status.PodIP = ""
-		browser.Status.CdpPort = 0
 		browser.Status.WsURL = ""
 		if err := r.Status().Update(ctx, browser); err != nil {
 			if apierrors.IsConflict(err) {
@@ -275,7 +271,7 @@ func (r *BrowserReconciler) setStatus(
 }
 
 // ────────────────────────────────────────────────────────────
-// Deterministic state (no discovery service)
+// Deterministic state
 // ────────────────────────────────────────────────────────────
 
 func (r *BrowserReconciler) reconcileBrowserState(ctx context.Context, browser *browserv1.Browser, readyPod *corev1.Pod, profileUID string) (ctrl.Result, error) {
@@ -284,7 +280,7 @@ func (r *BrowserReconciler) reconcileBrowserState(ctx context.Context, browser *
 	// One browser per pod with a fixed CDP proxy port fronted by a stable
 	// Service — so the CDP ws_url is deterministic and never drifts. The
 	// in-pod proxy rewrites the ws path across Chrome restarts and the Service
-	// keeps a stable DNS name across pod restarts. No Redis, no discovery.
+	// keeps a stable DNS name across pod restarts.
 	wsURL := fmt.Sprintf("ws://%s.%s.svc.cluster.local:%d/devtools/browser/%s",
 		browser.Name, browser.Namespace, cdpPort, profileUID)
 
@@ -293,8 +289,6 @@ func (r *BrowserReconciler) reconcileBrowserState(ctx context.Context, browser *
 		browser.Status.PodName != readyPod.Name {
 		browser.Status.Phase = browserv1.BrowserPhaseRunning
 		browser.Status.PodName = readyPod.Name
-		browser.Status.PodIP = readyPod.Status.PodIP
-		browser.Status.CdpPort = cdpPort
 		browser.Status.WsURL = wsURL
 		browser.Status.Message = "Browser is ready"
 

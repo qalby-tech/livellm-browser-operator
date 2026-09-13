@@ -14,7 +14,6 @@ import (
 
 const (
 	controllerPort         = 8000
-	defaultControllerImage = "kamasalyamov/livellm-browser:controller-2.0.1"
 	browsersConfigMountDir = "/etc/livellm"
 )
 
@@ -38,9 +37,6 @@ func controllerSelectorLabels(name string) map[string]string {
 // ────────────────────────────────────────────────────────────
 
 func applyControllerDeploymentSpec(deploy *appsv1.Deployment, ctrlCR *browserv1.Controller, defaultImg string, pullPolicy string, defaultEnv []corev1.EnvVar, defaultRes *browserv1.ResourcesSpec) {
-	if defaultImg == "" {
-		defaultImg = defaultControllerImage
-	}
 	image := ctrlCR.Spec.Image
 	if image == "" {
 		image = defaultImg

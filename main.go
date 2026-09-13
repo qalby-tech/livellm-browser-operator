@@ -81,12 +81,11 @@ func main() {
 	defaultControllerImage := os.Getenv("DEFAULT_CONTROLLER_IMAGE")
 	defaultBrowserPullPolicy := os.Getenv("DEFAULT_BROWSER_PULL_POLICY")
 	defaultControllerPullPolicy := os.Getenv("DEFAULT_CONTROLLER_PULL_POLICY")
-	if defaultBrowserImage != "" {
-		setupLog.Info("default browser image overridden", "image", defaultBrowserImage)
+	if defaultBrowserImage == "" || defaultControllerImage == "" {
+		setupLog.Error(nil, "DEFAULT_BROWSER_IMAGE and DEFAULT_CONTROLLER_IMAGE must be set (the chart sets them from Chart.yaml)")
+		os.Exit(1)
 	}
-	if defaultControllerImage != "" {
-		setupLog.Info("default controller image overridden", "image", defaultControllerImage)
-	}
+	setupLog.Info("default images", "browser", defaultBrowserImage, "controller", defaultControllerImage)
 	if defaultBrowserPullPolicy != "" {
 		setupLog.Info("default browser pull policy configured", "pullPolicy", defaultBrowserPullPolicy)
 	}

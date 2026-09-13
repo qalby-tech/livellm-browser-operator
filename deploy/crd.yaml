@@ -27,10 +27,6 @@ spec:
       name: WS URL
       priority: 1
       type: string
-    - jsonPath: .status.podIP
-      name: Pod IP
-      priority: 1
-      type: string
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -242,8 +238,8 @@ spec:
                 type: string
               proxy:
                 description: |-
-                  Proxy configures HTTP proxy for the browser.
-                  Only applied when profileUid != "default" (operator creates a new browser via launcher API).
+                  Proxy configures the HTTP proxy for the browser. Passed to the pod as
+                  BROWSER_PROXY_* env and applied to the default browser at startup.
                 properties:
                   bypass:
                     description: Bypass is a comma-separated list of hosts to bypass.
@@ -303,29 +299,23 @@ spec:
           status:
             description: BrowserStatus defines the observed state of a Browser.
             properties:
-              cdpPort:
-                description: CdpPort is the CDP proxy port inside the pod.
-                type: integer
               message:
                 description: Message is a human-readable status message.
                 type: string
               phase:
                 description: Phase is the current lifecycle phase.
                 enum:
-                - Pending
                 - Creating
                 - Running
-                - Failed
                 - Stopped
-                type: string
-              podIP:
-                description: PodIP is the cluster IP of the running browser pod.
                 type: string
               podName:
                 description: PodName is the name of the running browser pod.
                 type: string
               wsUrl:
-                description: 'WsURL is the full CDP WebSocket URL: ws://<podIP>:<cdpPort>/devtools/browser/<id>'
+                description: |-
+                  WsURL is the full CDP WebSocket URL:
+                  ws://<name>.<namespace>.svc.cluster.local:9222/devtools/browser/<id>
                 type: string
             type: object
         type: object
@@ -789,10 +779,8 @@ spec:
               phase:
                 description: Phase is the current lifecycle phase.
                 enum:
-                - Pending
                 - Creating
                 - Running
-                - Failed
                 type: string
               podName:
                 description: PodName is the name of a running controller pod.

@@ -121,14 +121,12 @@ type AutoscaleBrowserTemplateSpec struct {
 }
 
 // ControllerPhase describes the lifecycle phase of a Controller.
-// +kubebuilder:validation:Enum=Pending;Creating;Running;Failed
+// +kubebuilder:validation:Enum=Creating;Running
 type ControllerPhase string
 
 const (
-	ControllerPhasePending  ControllerPhase = "Pending"
 	ControllerPhaseCreating ControllerPhase = "Creating"
 	ControllerPhaseRunning  ControllerPhase = "Running"
-	ControllerPhaseFailed   ControllerPhase = "Failed"
 )
 
 // RegisteredBrowser records a browser that has been registered with the controller.

@@ -5,14 +5,14 @@ metadata:
   name: my-browser
   namespace: default
 spec:
-  # Profile UID — used as browser_id when registering with the controller
+  # Profile UID — the browser_id the controller resolves X-Browser-Id against
   profileUid: "default"
 
   # Keep the browser pod running (default true). Set false to scale Deployment to 0; PVC is kept.
   # running: false
 
   # Browser container image (optional, defaults to latest stable)
-  # image: kamasalyamov/livellm-browser:2.0.1
+  # image: kamasalyamov/livellm-browser:2.2.7
 
   # PVC size for profile data
   storage: "1Gi"

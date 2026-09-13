@@ -35,8 +35,8 @@ type BrowserSpec struct {
 	// +optional
 	ShmSize string `json:"shmSize,omitempty"`
 
-	// Proxy configures HTTP proxy for the browser.
-	// Only applied when profileUid != "default" (operator creates a new browser via launcher API).
+	// Proxy configures the HTTP proxy for the browser. Passed to the pod as
+	// BROWSER_PROXY_* env and applied to the default browser at startup.
 	// +optional
 	Proxy *ProxySpec `json:"proxy,omitempty"`
 
@@ -116,14 +116,12 @@ type ResourcesSpec struct {
 }
 
 // BrowserPhase describes the lifecycle phase of a Browser.
-// +kubebuilder:validation:Enum=Pending;Creating;Running;Failed;Stopped
+// +kubebuilder:validation:Enum=Creating;Running;Stopped
 type BrowserPhase string
 
 const (
-	BrowserPhasePending  BrowserPhase = "Pending"
 	BrowserPhaseCreating BrowserPhase = "Creating"
 	BrowserPhaseRunning  BrowserPhase = "Running"
-	BrowserPhaseFailed   BrowserPhase = "Failed"
 	BrowserPhaseStopped  BrowserPhase = "Stopped"
 )
 
@@ -137,15 +135,8 @@ type BrowserStatus struct {
 	// +optional
 	PodName string `json:"podName,omitempty"`
 
-	// PodIP is the cluster IP of the running browser pod.
-	// +optional
-	PodIP string `json:"podIP,omitempty"`
-
-	// CdpPort is the CDP proxy port inside the pod.
-	// +optional
-	CdpPort int `json:"cdpPort,omitempty"`
-
-	// WsURL is the full CDP WebSocket URL: ws://<podIP>:<cdpPort>/devtools/browser/<id>
+	// WsURL is the full CDP WebSocket URL:
+	// ws://<name>.<namespace>.svc.cluster.local:9222/devtools/browser/<id>
 	// +optional
 	WsURL string `json:"wsUrl,omitempty"`
 
@@ -160,7 +151,6 @@ type BrowserStatus struct {
 // +kubebuilder:printcolumn:name="Profile",type=string,JSONPath=`.spec.profileUid`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="WS URL",type=string,JSONPath=`.status.wsUrl`,priority=1
-// +kubebuilder:printcolumn:name="Pod IP",type=string,JSONPath=`.status.podIP`,priority=1
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // Browser is the Schema for the browsers API.

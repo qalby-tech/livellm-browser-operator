@@ -7,10 +7,11 @@ Each `Browser` CR results in:
 - a **PVC** (persistent profile data)
 - a **Service** (launcher API access)
 
-The operator discovers the CDP WebSocket URL from the in-pod launcher and
-writes it to `Browser` status. To connect the **livellm controller**, create a
-`Controller` CR in the same namespace — it deploys the controller and registers
-running browsers via `POST /parser/browsers`.
+The operator writes each browser's deterministic CDP WebSocket URL
+(`ws://<name>.<namespace>.svc.cluster.local:9222/devtools/browser/<profileUid>`)
+to `Browser` status. To connect the **livellm controller**, create a
+`Controller` CR in the same namespace — it deploys the controller and hands it
+the namespace's browsers through a registry ConfigMap.
 
 ---
 
@@ -113,14 +114,14 @@ Deploy a `Controller` CR (same namespace as your browsers). The operator creates
 the controller workload and writes a `<controller>-browsers` ConfigMap mapping
 each ready browser's `profileUid` to its deterministic Service ws_url; the
 controller mounts it at `BROWSERS_CONFIG` and resolves `X-Browser-Id` against it.
-No Redis. See `deploy/examples/controller.yaml`.
+See `deploy/examples/controller.yaml`.
 
 ### Tuning the Node.js heap
 
 The **controller** pod is Node-only (no Chrome). The operator auto-sizes
 `NODE_OPTIONS=--max-old-space-size=N` from the pod's memory limit:
-`N = min(limit / 2, 4096)` MiB, floored at 512 MiB. So a 2 GiB controller
-gets 1024, a 4 GiB gets 2048, anything ≥ 8 GiB caps at 4096. Override via
+`N = max(limit / 2, limit - 2 GiB)` MiB, clamped to 512-8192. So a 2 GiB
+controller gets 1024, a 4 GiB gets 2048, an 8 GiB gets 6144. Override via
 `spec.env` (or `DEFAULT_CONTROLLER_ENV`) only when the auto value is
 unsuitable — duplicate env entries are last-write-wins.
 
@@ -148,8 +149,7 @@ operator built-in fallback.
 The operator passes a browser's `extensions` and `proxy` to its pod as env, and
 mounts the `cookies` ConfigMap/Secret as a file (`BROWSER_COOKIES_FILE`); the
 browser applies them to the default browser at startup. Changing extensions,
-cookies, or proxy updates the pod spec and rolls the browser — there is no
-runtime Redis channel.
+cookies, or proxy updates the pod spec and rolls the browser.
 
 ---
 
@@ -212,20 +212,26 @@ make vet         # go vet
 ```
 ├── main.go                              # Entry point
 ├── api/v1alpha1/
-│   ├── browser_types.go                 # CRD Go types  ← edit this
+│   ├── browser_types.go                 # Browser CRD Go types  ← edit this
+│   ├── controller_types.go              # Controller CRD Go types  ← edit this
 │   ├── groupversion_info.go             # GVK registration
 │   └── zz_generated.deepcopy.go         # generated — do not edit
 ├── internal/controller/
-│   ├── browser_controller.go            # Reconciler
-│   └── resources.go                     # PVC / Deployment / Service builders
+│   ├── browser_controller.go            # Browser reconciler
+│   ├── controller_controller.go         # Controller reconciler + browser registry ConfigMap
+│   ├── resources.go                     # Browser PVC / Deployment / Service builders
+│   ├── controller_resources.go          # Controller Deployment / Service builders
+│   ├── pagecounts.go                    # Per-browser page counts from the controller API
+│   └── resources_test.go
 ├── deploy/
-│   ├── crd.yaml                         # generated CRD manifest
+│   ├── crd.yaml                         # generated CRD manifests (both CRDs)
 │   ├── rbac.yaml                        # ServiceAccount + ClusterRole
 │   ├── operator.yaml                    # Operator Deployment
 │   ├── namespace.yaml                   # livellm-system namespace
 │   ├── kustomization.yaml               # kustomize entry point
 │   └── examples/
-│       └── browser.yaml                 # Sample Browser CRs
+│       ├── browser.yaml                 # Sample Browser CR
+│       └── controller.yaml              # Sample Controller CR
 ├── Dockerfile                           # Multi-stage distroless build
 ├── Makefile
 ├── go.mod

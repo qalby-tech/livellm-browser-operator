@@ -6,7 +6,7 @@ metadata:
   namespace: default
 spec:
   # Controller container image (optional, defaults to latest stable)
-  # image: kamasalyamov/livellm-browser:controller-2.0.1
+  # image: kamasalyamov/livellm-browser:controller-2.3.2
 
   # Number of replicas
   replicas: 1
@@ -21,8 +21,8 @@ spec:
       memory: "2Gi"
 
   # Environment variables for the controller container. NODE_OPTIONS is
-  # auto-sized from the pod memory limit (min(limit/2, 4096) MiB, floored
-  # at 512 MiB) — only override if the auto value is unsuitable.
+  # auto-sized from the pod memory limit (max(limit/2, limit - 2 GiB) MiB,
+  # clamped to 512-8192) — only override if the auto value is unsuitable.
   # env:
   #   - name: NODE_OPTIONS
   #     value: "--max-old-space-size=2048"

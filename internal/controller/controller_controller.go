@@ -225,7 +225,7 @@ func (r *ControllerReconciler) collectBrowsers(ctx context.Context, ctrlCR *brow
 }
 
 // ensureBrowsersConfigMap writes the browser registry the controller reads
-// (BROWSERS_CONFIG) — replaces Redis discovery. Local browsers are addressed by
+// (BROWSERS_CONFIG). Local browsers are addressed by
 // a deterministic Service ws_url; BYO browsers by their supplied ws endpoint.
 func (r *ControllerReconciler) ensureBrowsersConfigMap(ctx context.Context, ctrlCR *browserv1.Controller) error {
 	entries, _, err := r.collectBrowsers(ctx, ctrlCR)
@@ -294,7 +294,7 @@ func (r *ControllerReconciler) reconcileControllerStatus(ctx context.Context, ct
 	}
 	sort.Slice(registered, func(i, j int) bool { return registered[i].ProfileUID < registered[j].ProfileUID })
 
-	// Per-browser page counts come from the controller's own HTTP API now
+	// Per-browser page counts come from the controller's own HTTP API
 	// (best-effort; empty when the controller isn't ready or has no sessions).
 	pageCounts := fetchControllerPageCounts(ctx, ctrlCR.Name, ctrlCR.Namespace)
 

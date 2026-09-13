@@ -18,7 +18,6 @@ type controllerBrowserInfo struct {
 // fetchControllerPageCounts queries a controller's GET /parser/browsers and
 // returns {browser_id: session_count}. Best-effort: returns an empty map on any
 // error (the controller may not be ready, or no browsers are connected yet).
-// This replaces the old Redis-published controller state used for autoscaling.
 func fetchControllerPageCounts(ctx context.Context, name, namespace string) map[string]int {
 	url := fmt.Sprintf("http://%s.%s.svc.cluster.local:%d/parser/browsers", name, namespace, controllerPort)
 	reqCtx, cancel := context.WithTimeout(ctx, 5*time.Second)

@@ -20,7 +20,6 @@ const (
 	cdpPort         = 9222
 	profileMountDir = "/home/headless/Desktop/app/profiles"
 	cookiesMountDir = "/etc/livellm/cookies"
-	defaultImage    = "kamasalyamov/livellm-browser:2.0.1"
 	defaultStorage  = "1Gi"
 	defaultShmSize  = "4Gi"
 
@@ -103,9 +102,6 @@ func buildPVC(browser *browserv1.Browser) *corev1.PersistentVolumeClaim {
 // applyDeploymentSpec sets the desired spec on an existing or new Deployment object.
 // Used inside controllerutil.CreateOrUpdate's mutate function.
 func applyDeploymentSpec(deploy *appsv1.Deployment, browser *browserv1.Browser, defaultImg string, pullPolicy string, defaultEnv []corev1.EnvVar, defaultRes *browserv1.ResourcesSpec) {
-	if defaultImg == "" {
-		defaultImg = defaultImage
-	}
 	image := browser.Spec.Image
 	if image == "" {
 		image = defaultImg
@@ -161,7 +157,7 @@ func applyDeploymentSpec(deploy *appsv1.Deployment, browser *browserv1.Browser, 
 		},
 	}
 	// Mount the cookies ConfigMap/Secret (if any) so the browser loads them at
-	// boot via BROWSER_COOKIES_FILE — replaces the old Redis desired-state path.
+	// boot via BROWSER_COOKIES_FILE.
 	if vol, mount := cookiesVolume(browser); vol != nil {
 		volumes = append(volumes, *vol)
 		volumeMounts = append(volumeMounts, *mount)
@@ -289,8 +285,7 @@ func buildBrowserEnv(browser *browserv1.Browser, defaultEnv []corev1.EnvVar, ext
 		{Name: "CDP_PORT", Value: fmt.Sprintf("%d", cdpPort)},
 	}
 
-	// Desired state passed declaratively (replaces the Redis desired-state
-	// channel): the browser reads these at startup.
+	// Desired state passed declaratively: the browser reads these at startup.
 	if len(browser.Spec.Extensions) > 0 {
 		if data, err := json.Marshal(browser.Spec.Extensions); err == nil {
 			env = append(env, corev1.EnvVar{Name: "BROWSER_EXTENSIONS", Value: string(data)})
@@ -387,7 +382,7 @@ func applyResourcesOverride(requests, limits corev1.ResourceList, override *brow
 
 // nodeMaxOldSpaceMiB sizes --max-old-space-size for the controller's Node
 // driver: max(limit/2, limit − 2 GiB) clamped to [512, 8192] MiB. Small pods
-// keep the historical half-split; large pods hand most of the memory to the
+// get a half-split; large pods hand most of the memory to the
 // driver (the component that actually OOMs under load) while ~2 GiB stays
 // reserved for the Python server and process overhead.
 func nodeMaxOldSpaceMiB(memLimit resource.Quantity) int64 {
