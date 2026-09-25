@@ -165,9 +165,10 @@ type RegisteredBrowser struct {
 	// +optional
 	PageCount int `json:"pageCount,omitempty"`
 	// OpenTabs is the number of tabs open in the browser, including ones a
-	// person opened (0 while the controller has not connected to it).
+	// person opened (0 while the controller has not connected to it). Left
+	// out when the controller could not be asked: absent means unknown.
 	// +optional
-	OpenTabs int `json:"openTabs,omitempty"`
+	OpenTabs *int `json:"openTabs,omitempty"`
 }
 
 // ControllerStatus defines the observed state of a Controller.

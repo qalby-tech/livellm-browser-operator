@@ -844,7 +844,8 @@ spec:
                     openTabs:
                       description: |-
                         OpenTabs is the number of tabs open in the browser, including ones a
-                        person opened (0 while the controller has not connected to it).
+                        person opened (0 while the controller has not connected to it). Left
+                        out when the controller could not be asked: absent means unknown.
                       type: integer
                     pageCount:
                       description: PageCount is the number of sessions that live on

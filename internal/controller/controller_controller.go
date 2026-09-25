@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"regexp"
 	"sort"
 	"strings"
@@ -35,8 +36,9 @@ const (
 	browsersConfigFile = "browsers.json"
 )
 
-// browsersConfigMapName is the per-Controller ConfigMap holding the browser registry.
-func browsersConfigMapName(controllerName string) string {
+// browsersRegistryName is the per-Controller Secret holding the browser
+// registry (a ConfigMap of the same name before 0.9.1).
+func browsersRegistryName(controllerName string) string {
 	return controllerName + "-browsers"
 }
 
@@ -96,10 +98,10 @@ func (r *ControllerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		}
 	}
 
-	// Write the browser registry ConfigMap first so it exists before the
-	// controller pod mounts it.
-	if err := r.ensureBrowsersConfigMap(ctx, &ctrlCR); err != nil {
-		logger.Error(err, "failed to ensure browsers ConfigMap")
+	// Write the browser registry first so it exists before the controller
+	// pod mounts it.
+	if err := r.ensureBrowsersRegistry(ctx, &ctrlCR); err != nil {
+		logger.Error(err, "failed to ensure the browser registry")
 		return ctrl.Result{RequeueAfter: controllerRequeueRetry}, nil
 	}
 	if err := r.ensureControllerDeployment(ctx, &ctrlCR); err != nil {
@@ -159,6 +161,10 @@ func parseAuthHeader(h string) map[string]string {
 	return map[string]string{"Authorization": h}
 }
 
+// remoteAuthLabel marks a Secret that may hold a remote browser's auth value.
+// authHeaderSecretRef is honoured only for a Secret carrying it set to "true".
+const remoteAuthLabel = "livellm.io/remote-browser-auth"
+
 // secretReader reads Secrets. It is the manager's uncached API reader, so the
 // operator never caches every Secret in the cluster.
 func (r *ControllerReconciler) secretReader() client.Reader {
@@ -186,11 +192,30 @@ func (r *ControllerReconciler) remoteAuth(ctx context.Context, ns string, ext br
 		}
 		return "", "", err
 	}
+	// Only a Secret written for this purpose may be read: the namespace also
+	// holds Secrets its owner can't read (pull credentials, database and
+	// backup-store keys), and the value is sent to an address the owner chose.
+	if sec.Labels[remoteAuthLabel] != "true" {
+		log.FromContext(ctx).V(1).Info("remote browser auth Secret lacks the label; ignored",
+			"secret", ref.Name, "label", remoteAuthLabel)
+		return "", missing, nil
+	}
 	v, ok := sec.Data[ref.Key]
 	if !ok || strings.TrimSpace(string(v)) == "" {
 		return "", missing, nil
 	}
 	return string(v), "", nil
+}
+
+// workloadIDLabel is the tenant chart's name for a browser (the one a person
+// gave it); notes use it so they never show internal object names.
+const workloadIDLabel = "qalby.ru/workload-id"
+
+func browserDisplayName(br *browserv1.Browser) string {
+	if v := br.Labels[workloadIDLabel]; v != "" {
+		return v
+	}
+	return br.Name
 }
 
 // collectBrowsers resolves the set of browsers this controller drives:
@@ -206,18 +231,21 @@ func (r *ControllerReconciler) collectBrowsers(ctx context.Context, ctrlCR *brow
 	entries := map[string]interface{}{}
 	registered := make([]browserv1.RegisteredBrowser, 0)
 	var notes []string
-	owner := map[string]string{} // id -> name of the browser that holds it
-	dup := map[string]bool{}     // "<id>/<name>" already reported
+	// owner: id -> the entry that holds it. key tells entries apart (the CR
+	// name, or the remote entry's position); display names it in notes.
+	type holder struct{ key, display string }
+	owner := map[string]holder{}
+	dup := map[string]bool{} // "<id>/<key>" already reported
 
-	claim := func(id, name string) bool {
+	claim := func(id, key, display string) bool {
 		first, taken := owner[id]
 		if !taken {
-			owner[id] = name
+			owner[id] = holder{key, display}
 			return true
 		}
-		if first != name && !dup[id+"/"+name] {
-			dup[id+"/"+name] = true
-			notes = append(notes, fmt.Sprintf("browsers %s and %s share id %s; only %s is used", first, name, id, first))
+		if first.key != key && !dup[id+"/"+key] {
+			dup[id+"/"+key] = true
+			notes = append(notes, fmt.Sprintf("%s and %s share id %s; only %s is used", first.display, display, id, first.display))
 		}
 		return false
 	}
@@ -230,7 +258,7 @@ func (r *ControllerReconciler) collectBrowsers(ctx context.Context, ctrlCR *brow
 		if br.Status.WsURL == "" {
 			return
 		}
-		if !claim(id, br.Name) {
+		if !claim(id, br.Name, "browser "+browserDisplayName(br)) {
 			return
 		}
 		entries[id] = br.Status.WsURL
@@ -265,8 +293,9 @@ func (r *ControllerReconciler) collectBrowsers(ctx context.Context, ctrlCR *brow
 		addLocal(&br)
 	}
 
-	for _, ext := range ctrlCR.Spec.ExternalBrowsers {
-		if ext.ID == "" || ext.WsURL == "" || !claim(ext.ID, "remote "+ext.ID) {
+	for i, ext := range ctrlCR.Spec.ExternalBrowsers {
+		if ext.ID == "" || ext.WsURL == "" ||
+			!claim(ext.ID, fmt.Sprintf("remote#%d", i), fmt.Sprintf("remote browser %d", i+1)) {
 			continue
 		}
 		auth, note, err := r.remoteAuth(ctx, ctrlCR.Namespace, ext)
@@ -287,10 +316,12 @@ func (r *ControllerReconciler) collectBrowsers(ctx context.Context, ctrlCR *brow
 	return entries, registered, notes, nil
 }
 
-// ensureBrowsersConfigMap writes the browser registry the controller reads
-// (BROWSERS_CONFIG). Local browsers are addressed by
-// a deterministic Service ws_url; BYO browsers by their supplied ws endpoint.
-func (r *ControllerReconciler) ensureBrowsersConfigMap(ctx context.Context, ctrlCR *browserv1.Controller) error {
+// ensureBrowsersRegistry writes the browser registry the controller reads
+// (BROWSERS_CONFIG) into an owned Secret: a remote browser's auth header is in
+// it, so it must not sit in a ConfigMap that far more roles can read. Local
+// browsers are addressed by a deterministic Service ws_url; remote ones by
+// their supplied ws endpoint. The ConfigMap older operators wrote is removed.
+func (r *ControllerReconciler) ensureBrowsersRegistry(ctx context.Context, ctrlCR *browserv1.Controller) error {
 	entries, _, _, err := r.collectBrowsers(ctx, ctrlCR)
 	if err != nil {
 		return err
@@ -300,18 +331,48 @@ func (r *ControllerReconciler) ensureBrowsersConfigMap(ctx context.Context, ctrl
 		return err
 	}
 
-	cm := &corev1.ConfigMap{
+	name := browsersRegistryName(ctrlCR.Name)
+	want := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      browsersConfigMapName(ctrlCR.Name),
+			Name:      name,
 			Namespace: ctrlCR.Namespace,
+			Labels:    controllerLabels(ctrlCR.Name),
 		},
+		Type: corev1.SecretTypeOpaque,
+		Data: map[string][]byte{browsersConfigFile: payload},
 	}
-	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, cm, func() error {
-		cm.Labels = controllerLabels(ctrlCR.Name)
-		cm.Data = map[string]string{browsersConfigFile: string(payload)}
-		return controllerutil.SetControllerReference(ctrlCR, cm, r.Scheme)
-	})
-	return err
+	if err := controllerutil.SetControllerReference(ctrlCR, want, r.Scheme); err != nil {
+		return err
+	}
+	// Read uncached (the manager's cache must never hold every Secret).
+	var cur corev1.Secret
+	err = r.secretReader().Get(ctx, types.NamespacedName{Name: name, Namespace: ctrlCR.Namespace}, &cur)
+	switch {
+	case apierrors.IsNotFound(err):
+		if err := r.Create(ctx, want); err != nil {
+			return err
+		}
+	case err != nil:
+		return err
+	default:
+		if !metav1.IsControlledBy(&cur, ctrlCR) {
+			return fmt.Errorf("secret %s/%s exists and is not owned by this controller", ctrlCR.Namespace, name)
+		}
+		if !reflect.DeepEqual(cur.Data, want.Data) || !reflect.DeepEqual(cur.Labels, want.Labels) {
+			// Replace Data whole, so a removed browser's header leaves too.
+			cur.Labels = want.Labels
+			cur.Data = want.Data
+			if err := r.Update(ctx, &cur); err != nil {
+				return err
+			}
+		}
+	}
+
+	old := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ctrlCR.Namespace}}
+	if err := r.Delete(ctx, old); err != nil && !apierrors.IsNotFound(err) {
+		log.FromContext(ctx).Info("could not remove the old registry ConfigMap", "error", err)
+	}
+	return nil
 }
 
 func (r *ControllerReconciler) ensureControllerService(ctx context.Context, ctrlCR *browserv1.Controller) error {
@@ -363,15 +424,7 @@ func (r *ControllerReconciler) reconcileControllerStatus(ctx context.Context, ct
 	if !ok {
 		logger.V(1).Info("controller did not answer GET /browsers; open tabs left out")
 	}
-	pageCounts := make(map[string]int, len(loads))
-	totalPages := 0
-	for i := range registered {
-		l := loads[registered[i].ProfileUID]
-		registered[i].PageCount = l.Sessions
-		registered[i].OpenTabs = l.OpenTabs
-		pageCounts[registered[i].ProfileUID] = l.Sessions
-		totalPages += l.Sessions
-	}
+	pageCounts, totalPages := applyLoads(registered, loads, ok)
 
 	autoscaledCount := 0
 	if ctrlCR.Spec.AutoscaleBrowser != nil && *ctrlCR.Spec.AutoscaleBrowser {
@@ -387,6 +440,26 @@ func (r *ControllerReconciler) reconcileControllerStatus(ctx context.Context, ct
 	}
 	return r.setControllerStatus(ctx, ctrlCR, browserv1.ControllerPhaseRunning,
 		message, registered, totalPages, autoscaledCount, controllerRequeueReady)
+}
+
+// applyLoads fills each registered browser's sessions and open tabs from the
+// controller's answer. OpenTabs stays nil (unknown) unless the controller was
+// asked (ok) and answered for that browser, so "0 open tabs" is never a guess.
+func applyLoads(registered []browserv1.RegisteredBrowser, loads map[string]browserLoad, ok bool) (map[string]int, int) {
+	pageCounts := make(map[string]int, len(registered))
+	total := 0
+	for i := range registered {
+		l, known := loads[registered[i].ProfileUID]
+		registered[i].PageCount = l.Sessions
+		registered[i].OpenTabs = nil
+		if ok && known {
+			tabs := l.OpenTabs
+			registered[i].OpenTabs = &tabs
+		}
+		pageCounts[registered[i].ProfileUID] = l.Sessions
+		total += l.Sessions
+	}
+	return pageCounts, total
 }
 
 func (r *ControllerReconciler) setControllerStatus(

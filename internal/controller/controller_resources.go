@@ -152,9 +152,9 @@ func applyControllerDeploymentSpec(deploy *appsv1.Deployment, ctrlCR *browserv1.
 		{
 			Name: "browsers-config",
 			VolumeSource: corev1.VolumeSource{
-				ConfigMap: &corev1.ConfigMapVolumeSource{
-					LocalObjectReference: corev1.LocalObjectReference{Name: browsersConfigMapName(ctrlCR.Name)},
-					Optional:             boolPtr(true),
+				Secret: &corev1.SecretVolumeSource{
+					SecretName: browsersRegistryName(ctrlCR.Name),
+					Optional:   boolPtr(true),
 				},
 			},
 		},

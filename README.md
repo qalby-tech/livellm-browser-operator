@@ -11,7 +11,7 @@ The operator writes each browser's deterministic CDP WebSocket URL
 (`ws://<name>.<namespace>.svc.cluster.local:9222/devtools/browser/<profileUid>`)
 to `Browser` status. To connect the **livellm controller**, create a
 `Controller` CR in the same namespace — it deploys the controller and hands it
-the namespace's browsers through a registry ConfigMap.
+the namespace's browsers through a registry Secret.
 
 ---
 
@@ -111,7 +111,7 @@ spec:
 ### Connecting the controller
 
 Deploy a `Controller` CR (same namespace as your browsers). The operator creates
-the controller workload and writes a `<controller>-browsers` ConfigMap mapping
+the controller workload and writes a `<controller>-browsers` Secret mapping
 each ready browser's `profileUid` to its deterministic Service ws_url; the
 controller mounts it at `BROWSERS_CONFIG` and resolves `X-Browser-Id` (and the
 `/browsers/<id>/` path) against it. Two browsers with the same id: the first
@@ -121,12 +121,14 @@ controller mounts it at `BROWSERS_CONFIG` and resolves `X-Browser-Id` (and the
   (filtered by `browserSelector`). `false`: only `browsers` and
   `externalBrowsers`.
 - `externalBrowsers[].authHeader` (or `authHeaderSecretRef: {name, key}`, which
-  wins): `"Name: value"` when the text before the first `:` is a header name
+  wins; only a Secret labelled `livellm.io/remote-browser-auth: "true"` is
+  read, any other counts as missing): `"Name: value"` when the text before the first `:` is a header name
   (letters, digits, `-`), otherwise the whole value is sent as
   `Authorization: <value>` (so `Bearer abc` works).
 - `status.registeredBrowsers[]` carries each browser's `openTabs` and
   `pageCount` (sessions), read from the controller's `GET /parser/browsers`
-  every minute. It carries no addresses.
+  every minute. `openTabs` is left out when the controller could not be
+  asked (unknown, not zero). It carries no addresses.
 
 See `deploy/examples/controller.yaml`.
 
@@ -232,7 +234,7 @@ make vet         # go vet
 │   └── zz_generated.deepcopy.go         # generated — do not edit
 ├── internal/controller/
 │   ├── browser_controller.go            # Browser reconciler
-│   ├── controller_controller.go         # Controller reconciler + browser registry ConfigMap
+│   ├── controller_controller.go         # Controller reconciler + browser registry Secret
 │   ├── resources.go                     # Browser PVC / Deployment / Service builders
 │   ├── controller_resources.go          # Controller Deployment / Service builders
 │   ├── pagecounts.go                    # Per-browser page counts from the controller API
