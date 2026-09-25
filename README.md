@@ -113,7 +113,21 @@ spec:
 Deploy a `Controller` CR (same namespace as your browsers). The operator creates
 the controller workload and writes a `<controller>-browsers` ConfigMap mapping
 each ready browser's `profileUid` to its deterministic Service ws_url; the
-controller mounts it at `BROWSERS_CONFIG` and resolves `X-Browser-Id` against it.
+controller mounts it at `BROWSERS_CONFIG` and resolves `X-Browser-Id` (and the
+`/browsers/<id>/` path) against it. Two browsers with the same id: the first
+(by name) is used and `status.message` says so.
+
+- `autodiscover` unset or `true`: every ready browser in the namespace
+  (filtered by `browserSelector`). `false`: only `browsers` and
+  `externalBrowsers`.
+- `externalBrowsers[].authHeader` (or `authHeaderSecretRef: {name, key}`, which
+  wins): `"Name: value"` when the text before the first `:` is a header name
+  (letters, digits, `-`), otherwise the whole value is sent as
+  `Authorization: <value>` (so `Bearer abc` works).
+- `status.registeredBrowsers[]` carries each browser's `openTabs` and
+  `pageCount` (sessions), read from the controller's `GET /parser/browsers`
+  every minute. It carries no addresses.
+
 See `deploy/examples/controller.yaml`.
 
 ### Tuning the Node.js heap

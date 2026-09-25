@@ -113,6 +113,7 @@ func main() {
 
 	controllerReconciler := &controller.ControllerReconciler{
 		Client:                      mgr.GetClient(),
+		APIReader:                   mgr.GetAPIReader(),
 		Scheme:                      mgr.GetScheme(),
 		DefaultControllerImage:      defaultControllerImage,
 		DefaultControllerPullPolicy: defaultControllerPullPolicy,

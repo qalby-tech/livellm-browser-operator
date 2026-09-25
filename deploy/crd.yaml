@@ -393,10 +393,13 @@ spec:
                   nil/true: register every Running Browser in the namespace (optionally
                   filtered by browserSelector). false: register ONLY the browsers named in
                   Browsers plus ExternalBrowsers — used for singleton (one browser) and
-                  grouped-manual controllers.
+                  grouped-manual controllers. An explicit false is honoured; nil stays
+                  "every browser" (the platform controller relies on it).
                 type: boolean
               autoscaleBrowser:
                 description: |-
+                  Deprecated: the platform never sets it. Kept for stored CRs.
+
                   AutoscaleBrowser enables automatic creation of new Browser CRs when
                   existing browsers reach maxPagesPerBrowser.
                   The operator creates Browser CRs named <controller>-autoscale-<N>.
@@ -707,12 +710,47 @@ spec:
                   properties:
                     authHeader:
                       description: |-
-                        AuthHeader optionally sets one HTTP header sent on the CDP connect, in
-                        "Name: value" form (e.g. "Authorization: Bearer abc"). For providers that
-                        require auth on the websocket handshake.
+                        AuthHeader optionally sets one HTTP header sent on the CDP connect. The
+                        value is "Name: value" when the text before the first ':' is a header
+                        name (letters, digits and '-' only, e.g. "X-Api-Key: abc"); any other
+                        value is sent whole as "Authorization: <value>" (e.g. "Bearer abc",
+                        "Bearer user:pass"). Prefer AuthHeaderSecretRef, which keeps the value
+                        off this object.
                       type: string
+                    authHeaderSecretRef:
+                      description: |-
+                        AuthHeaderSecretRef reads the same value (same rule as AuthHeader) from a
+                        key of a Secret in the Controller's namespace. It wins over AuthHeader.
+                        A missing Secret or key registers the browser without a header and says
+                        so in status.message. The operator copies the header into the
+                        controller's browser registry; a change to the Secret is picked up
+                        within a minute.
+                      properties:
+                        key:
+                          description: The key of the secret to select from.  Must
+                            be a valid secret key.
+                          type: string
+                        name:
+                          default: ""
+                          description: |-
+                            Name of the referent.
+                            This field is effectively required, but due to backwards compatibility is
+                            allowed to be empty. Instances of this type with an empty value here are
+                            almost certainly wrong.
+                            More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                          type: string
+                        optional:
+                          description: Specify whether the Secret or its key must
+                            be defined
+                          type: boolean
+                      required:
+                      - key
+                      type: object
+                      x-kubernetes-map-type: atomic
                     id:
-                      description: ID is the browser id used in the X-Browser-Id header.
+                      description: |-
+                        ID is the browser id: the value of the X-Browser-Id header and the
+                        <id> of the /browsers/<id>/ path.
                       type: string
                     wsUrl:
                       description: WsURL is the CDP websocket endpoint (ws:// or wss://).
@@ -729,6 +767,9 @@ spec:
                 type: string
               maxPagesPerBrowser:
                 description: |-
+                  Deprecated: the platform never sets it; the controller picks the browser
+                  with the fewest open tabs and has no "full". Kept for stored CRs.
+
                   MaxPagesPerBrowser sets the maximum number of concurrent pages (sessions)
                   a single browser may hold.  When the limit is reached, new sessions are
                   routed to a different browser or — if autoscaleBrowser is true — a new
@@ -797,27 +838,38 @@ spec:
                     with the controller.
                   properties:
                     name:
-                      description: Name is the Browser CR name.
+                      description: Name is the Browser CR name (the id, for a remote
+                        browser).
                       type: string
+                    openTabs:
+                      description: |-
+                        OpenTabs is the number of tabs open in the browser, including ones a
+                        person opened (0 while the controller has not connected to it).
+                      type: integer
                     pageCount:
-                      description: PageCount is the current number of open pages/sessions
-                        on this browser.
+                      description: PageCount is the number of sessions that live on
+                        this browser.
                       type: integer
                     profileUid:
-                      description: ProfileUID is the profile identifier used as browser_id.
+                      description: |-
+                        ProfileUID is the browser id: the X-Browser-Id value and the <id> of
+                        the /browsers/<id>/ path.
                       type: string
+                    remote:
+                      description: Remote is true for a browser from spec.externalBrowsers.
+                      type: boolean
                     wsUrl:
-                      description: WsURL is the CDP WebSocket URL registered with
-                        the controller.
+                      description: |-
+                        Deprecated: no longer filled (status carries no internal or remote
+                        addresses). Kept so stored statuses stay valid.
                       type: string
                   required:
                   - name
                   - profileUid
-                  - wsUrl
                   type: object
                 type: array
               totalPageCount:
-                description: TotalPageCount is the sum of open pages across all registered
+                description: TotalPageCount is the sum of sessions across all registered
                   browsers.
                 type: integer
               url:

@@ -31,7 +31,8 @@ type ControllerSpec struct {
 	// nil/true: register every Running Browser in the namespace (optionally
 	// filtered by browserSelector). false: register ONLY the browsers named in
 	// Browsers plus ExternalBrowsers — used for singleton (one browser) and
-	// grouped-manual controllers.
+	// grouped-manual controllers. An explicit false is honoured; nil stays
+	// "every browser" (the platform controller relies on it).
 	// +optional
 	Autodiscover *bool `json:"autodiscover,omitempty"`
 
@@ -49,6 +50,9 @@ type ControllerSpec struct {
 	// +optional
 	Env []corev1.EnvVar `json:"env,omitempty"`
 
+	// Deprecated: the platform never sets it; the controller picks the browser
+	// with the fewest open tabs and has no "full". Kept for stored CRs.
+	//
 	// MaxPagesPerBrowser sets the maximum number of concurrent pages (sessions)
 	// a single browser may hold.  When the limit is reached, new sessions are
 	// routed to a different browser or — if autoscaleBrowser is true — a new
@@ -57,6 +61,8 @@ type ControllerSpec struct {
 	// +optional
 	MaxPagesPerBrowser *int32 `json:"maxPagesPerBrowser,omitempty"`
 
+	// Deprecated: the platform never sets it. Kept for stored CRs.
+	//
 	// AutoscaleBrowser enables automatic creation of new Browser CRs when
 	// existing browsers reach maxPagesPerBrowser.
 	// The operator creates Browser CRs named <controller>-autoscale-<N>.
@@ -80,15 +86,27 @@ type ControllerSpec struct {
 
 // ExternalBrowser is a remote/BYO browser registered by ws endpoint.
 type ExternalBrowser struct {
-	// ID is the browser id used in the X-Browser-Id header.
+	// ID is the browser id: the value of the X-Browser-Id header and the
+	// <id> of the /browsers/<id>/ path.
 	ID string `json:"id"`
 	// WsURL is the CDP websocket endpoint (ws:// or wss://).
 	WsURL string `json:"wsUrl"`
-	// AuthHeader optionally sets one HTTP header sent on the CDP connect, in
-	// "Name: value" form (e.g. "Authorization: Bearer abc"). For providers that
-	// require auth on the websocket handshake.
+	// AuthHeader optionally sets one HTTP header sent on the CDP connect. The
+	// value is "Name: value" when the text before the first ':' is a header
+	// name (letters, digits and '-' only, e.g. "X-Api-Key: abc"); any other
+	// value is sent whole as "Authorization: <value>" (e.g. "Bearer abc",
+	// "Bearer user:pass"). Prefer AuthHeaderSecretRef, which keeps the value
+	// off this object.
 	// +optional
 	AuthHeader string `json:"authHeader,omitempty"`
+	// AuthHeaderSecretRef reads the same value (same rule as AuthHeader) from a
+	// key of a Secret in the Controller's namespace. It wins over AuthHeader.
+	// A missing Secret or key registers the browser without a header and says
+	// so in status.message. The operator copies the header into the
+	// controller's browser registry; a change to the Secret is picked up
+	// within a minute.
+	// +optional
+	AuthHeaderSecretRef *corev1.SecretKeySelector `json:"authHeaderSecretRef,omitempty"`
 }
 
 // AutoscaleBrowserTemplateSpec is the template for browser CRs created by autoscaling.
@@ -131,15 +149,25 @@ const (
 
 // RegisteredBrowser records a browser that has been registered with the controller.
 type RegisteredBrowser struct {
-	// Name is the Browser CR name.
+	// Name is the Browser CR name (the id, for a remote browser).
 	Name string `json:"name"`
-	// ProfileUID is the profile identifier used as browser_id.
+	// ProfileUID is the browser id: the X-Browser-Id value and the <id> of
+	// the /browsers/<id>/ path.
 	ProfileUID string `json:"profileUid"`
-	// WsURL is the CDP WebSocket URL registered with the controller.
-	WsURL string `json:"wsUrl"`
-	// PageCount is the current number of open pages/sessions on this browser.
+	// Deprecated: no longer filled (status carries no internal or remote
+	// addresses). Kept so stored statuses stay valid.
+	// +optional
+	WsURL string `json:"wsUrl,omitempty"`
+	// Remote is true for a browser from spec.externalBrowsers.
+	// +optional
+	Remote bool `json:"remote,omitempty"`
+	// PageCount is the number of sessions that live on this browser.
 	// +optional
 	PageCount int `json:"pageCount,omitempty"`
+	// OpenTabs is the number of tabs open in the browser, including ones a
+	// person opened (0 while the controller has not connected to it).
+	// +optional
+	OpenTabs int `json:"openTabs,omitempty"`
 }
 
 // ControllerStatus defines the observed state of a Controller.
@@ -168,7 +196,7 @@ type ControllerStatus struct {
 	// +optional
 	Message string `json:"message,omitempty"`
 
-	// TotalPageCount is the sum of open pages across all registered browsers.
+	// TotalPageCount is the sum of sessions across all registered browsers.
 	// +optional
 	TotalPageCount int `json:"totalPageCount,omitempty"`
 

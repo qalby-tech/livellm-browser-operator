@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -41,6 +42,8 @@ func browsersConfigMapName(controllerName string) string {
 
 type ControllerReconciler struct {
 	client.Client
+	// APIReader reads Secrets uncached (mgr.GetAPIReader()).
+	APIReader                   client.Reader
 	Scheme                      *runtime.Scheme
 	DefaultControllerImage      string
 	DefaultControllerPullPolicy string
@@ -133,51 +136,105 @@ func (r *ControllerReconciler) ensureControllerDeployment(ctx context.Context, c
 	return err
 }
 
-// parseAuthHeader parses an "Name: value" header string into a single-entry
-// header map. Returns nil for empty/malformed input.
+// headerName matches the text before the first ':' of a "Name: value" header.
+var headerName = regexp.MustCompile(`^[A-Za-z0-9-]+$`)
+
+// parseAuthHeader turns a remote browser's auth value into a single-entry
+// header map. The value is "Name: value" only when the text before the first
+// ':' is a header name (letters, digits and '-'); any other value is sent whole
+// as "Authorization: <value>", so "Bearer abc" and "Bearer user:pass" both mean
+// Authorization. Returns nil for an empty value.
 func parseAuthHeader(h string) map[string]string {
 	h = strings.TrimSpace(h)
-	i := strings.Index(h, ":")
-	if i <= 0 {
+	if h == "" {
 		return nil
 	}
-	name := strings.TrimSpace(h[:i])
-	value := strings.TrimSpace(h[i+1:])
-	if name == "" || value == "" {
-		return nil
+	if i := strings.Index(h, ":"); i > 0 && headerName.MatchString(h[:i]) {
+		value := strings.TrimSpace(h[i+1:])
+		if value == "" {
+			return nil
+		}
+		return map[string]string{h[:i]: value}
 	}
-	return map[string]string{name: value}
+	return map[string]string{"Authorization": h}
+}
+
+// secretReader reads Secrets. It is the manager's uncached API reader, so the
+// operator never caches every Secret in the cluster.
+func (r *ControllerReconciler) secretReader() client.Reader {
+	if r.APIReader != nil {
+		return r.APIReader
+	}
+	return r.Client
+}
+
+// remoteAuth resolves a remote browser's auth value: the Secret reference wins
+// over the inline value. note is non-empty when the Secret can't be used.
+func (r *ControllerReconciler) remoteAuth(ctx context.Context, ns string, ext browserv1.ExternalBrowser) (value, note string, err error) {
+	ref := ext.AuthHeaderSecretRef
+	if ref == nil || ref.Name == "" {
+		return ext.AuthHeader, "", nil
+	}
+	missing := ""
+	if ref.Optional == nil || !*ref.Optional {
+		missing = fmt.Sprintf("remote browser %s: its sign-in value is missing, so it is used without one", ext.ID)
+	}
+	var sec corev1.Secret
+	if err := r.secretReader().Get(ctx, types.NamespacedName{Name: ref.Name, Namespace: ns}, &sec); err != nil {
+		if apierrors.IsNotFound(err) {
+			return "", missing, nil
+		}
+		return "", "", err
+	}
+	v, ok := sec.Data[ref.Key]
+	if !ok || strings.TrimSpace(string(v)) == "" {
+		return "", missing, nil
+	}
+	return string(v), "", nil
 }
 
 // collectBrowsers resolves the set of browsers this controller drives:
-//   - autodiscovered in-namespace Browsers (when autodiscover is nil/true),
-//     optionally filtered by browserSelector;
+//   - autodiscovered in-namespace Browsers (when autodiscover is nil/true; an
+//     explicit false is honoured), optionally filtered by browserSelector;
 //   - explicit in-namespace Browsers named in spec.browsers;
 //   - external/BYO browsers from spec.externalBrowsers.
 //
 // It returns the registry entries (id -> ws_url string, or {wsUrl,headers} for
-// BYO with auth) and a parallel RegisteredBrowser list for status.
-func (r *ControllerReconciler) collectBrowsers(ctx context.Context, ctrlCR *browserv1.Controller) (map[string]interface{}, []browserv1.RegisteredBrowser, error) {
+// BYO with auth), a parallel RegisteredBrowser list for status, and notes for
+// status.message (browsers that share an id, unusable sign-in values).
+func (r *ControllerReconciler) collectBrowsers(ctx context.Context, ctrlCR *browserv1.Controller) (map[string]interface{}, []browserv1.RegisteredBrowser, []string, error) {
 	entries := map[string]interface{}{}
 	registered := make([]browserv1.RegisteredBrowser, 0)
-	seen := map[string]bool{}
+	var notes []string
+	owner := map[string]string{} // id -> name of the browser that holds it
+	dup := map[string]bool{}     // "<id>/<name>" already reported
+
+	claim := func(id, name string) bool {
+		first, taken := owner[id]
+		if !taken {
+			owner[id] = name
+			return true
+		}
+		if first != name && !dup[id+"/"+name] {
+			dup[id+"/"+name] = true
+			notes = append(notes, fmt.Sprintf("browsers %s and %s share id %s; only %s is used", first, name, id, first))
+		}
+		return false
+	}
 
 	addLocal := func(br *browserv1.Browser) {
-		if br.Status.WsURL == "" {
-			return
-		}
 		id := br.Spec.ProfileUID
 		if id == "" {
 			id = br.Name
 		}
-		if seen[id] {
+		if br.Status.WsURL == "" {
 			return
 		}
-		seen[id] = true
+		if !claim(id, br.Name) {
+			return
+		}
 		entries[id] = br.Status.WsURL
-		registered = append(registered, browserv1.RegisteredBrowser{
-			Name: br.Name, ProfileUID: id, WsURL: br.Status.WsURL,
-		})
+		registered = append(registered, browserv1.RegisteredBrowser{Name: br.Name, ProfileUID: id})
 	}
 
 	autodiscover := ctrlCR.Spec.Autodiscover == nil || *ctrlCR.Spec.Autodiscover
@@ -188,8 +245,10 @@ func (r *ControllerReconciler) collectBrowsers(ctx context.Context, ctrlCR *brow
 			listOpts = append(listOpts, client.MatchingLabels(ctrlCR.Spec.BrowserSelector))
 		}
 		if err := r.List(ctx, &browsers, listOpts...); err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
+		// List order is by name; keep it so "only X is used" is stable.
+		sort.Slice(browsers.Items, func(i, j int) bool { return browsers.Items[i].Name < browsers.Items[j].Name })
 		for i := range browsers.Items {
 			addLocal(&browsers.Items[i])
 		}
@@ -201,34 +260,38 @@ func (r *ControllerReconciler) collectBrowsers(ctx context.Context, ctrlCR *brow
 			if apierrors.IsNotFound(err) {
 				continue
 			}
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		addLocal(&br)
 	}
 
 	for _, ext := range ctrlCR.Spec.ExternalBrowsers {
-		if ext.ID == "" || ext.WsURL == "" || seen[ext.ID] {
+		if ext.ID == "" || ext.WsURL == "" || !claim(ext.ID, "remote "+ext.ID) {
 			continue
 		}
-		seen[ext.ID] = true
-		if h := parseAuthHeader(ext.AuthHeader); len(h) > 0 {
+		auth, note, err := r.remoteAuth(ctx, ctrlCR.Namespace, ext)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		if note != "" {
+			notes = append(notes, note)
+		}
+		if h := parseAuthHeader(auth); len(h) > 0 {
 			entries[ext.ID] = map[string]interface{}{"wsUrl": ext.WsURL, "headers": h}
 		} else {
 			entries[ext.ID] = ext.WsURL
 		}
-		registered = append(registered, browserv1.RegisteredBrowser{
-			Name: ext.ID, ProfileUID: ext.ID, WsURL: ext.WsURL,
-		})
+		registered = append(registered, browserv1.RegisteredBrowser{Name: ext.ID, ProfileUID: ext.ID, Remote: true})
 	}
 
-	return entries, registered, nil
+	return entries, registered, notes, nil
 }
 
 // ensureBrowsersConfigMap writes the browser registry the controller reads
 // (BROWSERS_CONFIG). Local browsers are addressed by
 // a deterministic Service ws_url; BYO browsers by their supplied ws endpoint.
 func (r *ControllerReconciler) ensureBrowsersConfigMap(ctx context.Context, ctrlCR *browserv1.Controller) error {
-	entries, _, err := r.collectBrowsers(ctx, ctrlCR)
+	entries, _, _, err := r.collectBrowsers(ctx, ctrlCR)
 	if err != nil {
 		return err
 	}
@@ -287,22 +350,27 @@ func (r *ControllerReconciler) reconcileControllerStatus(ctx context.Context, ct
 			"Waiting for controller pod to be ready", nil, 0, 0, controllerRequeuePending)
 	}
 
-	_, registered, err := r.collectBrowsers(ctx, ctrlCR)
+	_, registered, notes, err := r.collectBrowsers(ctx, ctrlCR)
 	if err != nil {
 		logger.Info("failed to collect browsers for status", "error", err)
 		registered = make([]browserv1.RegisteredBrowser, 0)
 	}
 	sort.Slice(registered, func(i, j int) bool { return registered[i].ProfileUID < registered[j].ProfileUID })
 
-	// Per-browser page counts come from the controller's own HTTP API
-	// (best-effort; empty when the controller isn't ready or has no sessions).
-	pageCounts := fetchControllerPageCounts(ctx, ctrlCR.Name, ctrlCR.Namespace)
-
+	// Per-browser open tabs and sessions come from the controller's own HTTP
+	// API (best-effort; left out when the controller can't be asked).
+	loads, ok := fetchControllerLoads(ctx, ctrlCR.Name, ctrlCR.Namespace)
+	if !ok {
+		logger.V(1).Info("controller did not answer GET /browsers; open tabs left out")
+	}
+	pageCounts := make(map[string]int, len(loads))
 	totalPages := 0
 	for i := range registered {
-		pc := pageCounts[registered[i].ProfileUID]
-		registered[i].PageCount = pc
-		totalPages += pc
+		l := loads[registered[i].ProfileUID]
+		registered[i].PageCount = l.Sessions
+		registered[i].OpenTabs = l.OpenTabs
+		pageCounts[registered[i].ProfileUID] = l.Sessions
+		totalPages += l.Sessions
 	}
 
 	autoscaledCount := 0
@@ -313,8 +381,12 @@ func (r *ControllerReconciler) reconcileControllerStatus(ctx context.Context, ct
 		}
 	}
 
+	message := "Controller is ready"
+	if len(notes) > 0 {
+		message += ". " + strings.Join(notes, ". ")
+	}
 	return r.setControllerStatus(ctx, ctrlCR, browserv1.ControllerPhaseRunning,
-		"Controller is ready", registered, totalPages, autoscaledCount, controllerRequeueReady)
+		message, registered, totalPages, autoscaledCount, controllerRequeueReady)
 }
 
 func (r *ControllerReconciler) setControllerStatus(
