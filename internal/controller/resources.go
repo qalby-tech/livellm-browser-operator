@@ -54,6 +54,19 @@ func mergePodLabels(base, extra map[string]string) map[string]string {
 	return out
 }
 
+// copyStringMap returns a copy of m, or nil when m is empty, so a CR without
+// the field renders the same pod template as before it existed.
+func copyStringMap(m map[string]string) map[string]string {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
+}
+
 func selectorLabels(name string) map[string]string {
 	return map[string]string{
 		"livellm.io/browser": name,
@@ -171,6 +184,7 @@ func applyDeploymentSpec(deploy *appsv1.Deployment, browser *browserv1.Browser, 
 		Template: corev1.PodTemplateSpec{
 			ObjectMeta: metav1.ObjectMeta{Labels: mergePodLabels(lbls, browser.Spec.PodLabels)},
 			Spec: corev1.PodSpec{
+				NodeSelector: copyStringMap(browser.Spec.NodeSelector),
 				SecurityContext: &corev1.PodSecurityContext{
 					RunAsUser:  int64Ptr(headlessUID),
 					RunAsGroup: int64Ptr(headlessGID),

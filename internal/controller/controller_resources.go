@@ -91,6 +91,7 @@ func applyControllerDeploymentSpec(deploy *appsv1.Deployment, ctrlCR *browserv1.
 		Template: corev1.PodTemplateSpec{
 			ObjectMeta: metav1.ObjectMeta{Labels: mergePodLabels(lbls, ctrlCR.Spec.PodLabels)},
 			Spec: corev1.PodSpec{
+				NodeSelector: copyStringMap(ctrlCR.Spec.NodeSelector),
 				Containers: []corev1.Container{
 					{
 						Name:            "controller",

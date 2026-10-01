@@ -67,6 +67,11 @@ type BrowserSpec struct {
 	// marker label whose change forces a clean rollout. Empty by default.
 	// +optional
 	PodLabels map[string]string `json:"podLabels,omitempty"`
+
+	// NodeSelector restricts which nodes the browser pod may run on (a plain
+	// passthrough to the pod's nodeSelector). Empty by default.
+	// +optional
+	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
 }
 
 // CookiesSource references a ConfigMap or Secret containing a JSON array of cookies.

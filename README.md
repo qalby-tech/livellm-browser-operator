@@ -108,6 +108,23 @@ spec:
     password: "pass"
 ```
 
+### Pinning to nodes
+
+Both kinds take `spec.nodeSelector`, a plain passthrough to the pod's
+`nodeSelector` (empty by default, so the scheduler picks). Changing it rolls
+the pod.
+
+| Kind | Field | Effect |
+|---|---|---|
+| `Browser` | `spec.nodeSelector` | node labels the browser pod must match |
+| `Controller` | `spec.nodeSelector` | node labels the controller pods must match |
+
+```yaml
+spec:
+  nodeSelector:
+    kubernetes.io/hostname: node-a
+```
+
 ### Connecting the controller
 
 Deploy a `Controller` CR (same namespace as your browsers). The operator creates

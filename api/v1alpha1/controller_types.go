@@ -82,6 +82,11 @@ type ControllerSpec struct {
 	// marker label whose change forces a clean rollout. Empty by default.
 	// +optional
 	PodLabels map[string]string `json:"podLabels,omitempty"`
+
+	// NodeSelector restricts which nodes the controller pods may run on (a
+	// plain passthrough to the pod's nodeSelector). Empty by default.
+	// +optional
+	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
 }
 
 // ExternalBrowser is a remote/BYO browser registered by ws endpoint.
