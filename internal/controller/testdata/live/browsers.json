@@ -1,0 +1,88 @@
+[
+  {
+    "apiVersion": "livellm.io/v1alpha1",
+    "kind": "Browser",
+    "metadata": {
+      "name": "livellm-browser",
+      "namespace": "browsers"
+    },
+    "spec": {
+      "extensions": [
+        "dknlfmjaanfblgfdfebhijalfmhmjjjo"
+      ],
+      "profileUid": "default",
+      "reclaimPolicy": "Delete",
+      "resources": {
+        "limits": {
+          "cpu": "2",
+          "memory": "4Gi"
+        },
+        "requests": {
+          "cpu": "2",
+          "memory": "4Gi"
+        }
+      },
+      "shmSize": "4Gi",
+      "storage": "4Gi"
+    }
+  },
+  {
+    "apiVersion": "livellm.io/v1alpha1",
+    "kind": "Browser",
+    "metadata": {
+      "name": "livellm-browser-dev",
+      "namespace": "browsers"
+    },
+    "spec": {
+      "extensions": [
+        "dknlfmjaanfblgfdfebhijalfmhmjjjo"
+      ],
+      "profileUid": "default",
+      "reclaimPolicy": "Delete",
+      "resources": {
+        "limits": {
+          "cpu": "2",
+          "memory": "4Gi"
+        },
+        "requests": {
+          "cpu": "2",
+          "memory": "4Gi"
+        }
+      },
+      "shmSize": "4Gi",
+      "storage": "4Gi"
+    }
+  },
+  {
+    "apiVersion": "livellm.io/v1alpha1",
+    "kind": "Browser",
+    "metadata": {
+      "name": "kamasalyamov-shipuchka-b1",
+      "namespace": "tenant-kamasalyamov",
+      "labels": {
+        "app.kubernetes.io/component": "browser",
+        "app.kubernetes.io/managed-by": "tenant-chart",
+        "app.kubernetes.io/part-of": "qalby",
+        "qalby.ru/plan": "founder",
+        "qalby.ru/tenant": "kamasalyamov",
+        "qalby.ru/workload-id": "shipuchka-b1"
+      }
+    },
+    "spec": {
+      "profileUid": "shipuchka-b1",
+      "reclaimPolicy": "Delete",
+      "resources": {
+        "limits": {
+          "cpu": "2",
+          "memory": "4Gi"
+        },
+        "requests": {
+          "cpu": "2",
+          "memory": "4Gi"
+        }
+      },
+      "shmSize": "4Gi",
+      "storage": "4Gi"
+    }
+  }
+]

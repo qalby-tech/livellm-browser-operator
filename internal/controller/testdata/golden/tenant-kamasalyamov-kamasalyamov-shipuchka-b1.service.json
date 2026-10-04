@@ -1,0 +1,43 @@
+{
+  "metadata": {
+    "creationTimestamp": null,
+    "labels": {
+      "app.kubernetes.io/instance": "kamasalyamov-shipuchka-b1",
+      "app.kubernetes.io/managed-by": "livellm-operator",
+      "app.kubernetes.io/name": "livellm-browser",
+      "istio.io/use-waypoint": "none",
+      "livellm.io/browser": "kamasalyamov-shipuchka-b1"
+    }
+  },
+  "spec": {
+    "ports": [
+      {
+        "name": "launcher",
+        "port": 9000,
+        "targetPort": 9000
+      },
+      {
+        "name": "vnc",
+        "port": 5901,
+        "targetPort": 5901
+      },
+      {
+        "name": "novnc",
+        "port": 6901,
+        "targetPort": 6901
+      },
+      {
+        "name": "cdp",
+        "port": 9222,
+        "targetPort": 9222
+      }
+    ],
+    "selector": {
+      "livellm.io/browser": "kamasalyamov-shipuchka-b1"
+    },
+    "type": "ClusterIP"
+  },
+  "status": {
+    "loadBalancer": {}
+  }
+}

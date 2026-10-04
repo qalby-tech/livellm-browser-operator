@@ -1,0 +1,152 @@
+{
+  "metadata": {
+    "creationTimestamp": null,
+    "labels": {
+      "app.kubernetes.io/instance": "livellm-browser",
+      "app.kubernetes.io/managed-by": "livellm-operator",
+      "app.kubernetes.io/name": "livellm-browser",
+      "livellm.io/browser": "livellm-browser"
+    }
+  },
+  "spec": {
+    "replicas": 1,
+    "selector": {
+      "matchLabels": {
+        "livellm.io/browser": "livellm-browser"
+      }
+    },
+    "template": {
+      "metadata": {
+        "creationTimestamp": null,
+        "labels": {
+          "app.kubernetes.io/instance": "livellm-browser",
+          "app.kubernetes.io/managed-by": "livellm-operator",
+          "app.kubernetes.io/name": "livellm-browser",
+          "livellm.io/browser": "livellm-browser"
+        }
+      },
+      "spec": {
+        "volumes": [
+          {
+            "name": "profile-data",
+            "persistentVolumeClaim": {
+              "claimName": "livellm-browser-profile"
+            }
+          },
+          {
+            "name": "dshm",
+            "emptyDir": {
+              "medium": "Memory",
+              "sizeLimit": "4Gi"
+            }
+          }
+        ],
+        "containers": [
+          {
+            "name": "browser",
+            "image": "kamasalyamov/livellm-browser:dev-2.2.8",
+            "ports": [
+              {
+                "name": "vnc",
+                "containerPort": 5901
+              },
+              {
+                "name": "novnc",
+                "containerPort": 6901
+              },
+              {
+                "name": "launcher",
+                "containerPort": 9000
+              },
+              {
+                "name": "cdp",
+                "containerPort": 9222
+              }
+            ],
+            "env": [
+              {
+                "name": "VNC_PW",
+                "value": "headless"
+              },
+              {
+                "name": "VNC_RESOLUTION",
+                "value": "1920x1080"
+              },
+              {
+                "name": "DISPLAY",
+                "value": ":1"
+              },
+              {
+                "name": "CDP_PORT",
+                "value": "9222"
+              },
+              {
+                "name": "BROWSER_EXTENSIONS",
+                "value": "[\"dknlfmjaanfblgfdfebhijalfmhmjjjo\"]"
+              }
+            ],
+            "resources": {
+              "limits": {
+                "cpu": "2",
+                "memory": "4Gi"
+              },
+              "requests": {
+                "cpu": "2",
+                "memory": "4Gi"
+              }
+            },
+            "volumeMounts": [
+              {
+                "name": "profile-data",
+                "mountPath": "/home/headless/Desktop/app/profiles"
+              },
+              {
+                "name": "dshm",
+                "mountPath": "/dev/shm"
+              }
+            ],
+            "livenessProbe": {
+              "httpGet": {
+                "path": "/health",
+                "port": 9000
+              },
+              "initialDelaySeconds": 15,
+              "timeoutSeconds": 5,
+              "periodSeconds": 10,
+              "failureThreshold": 3
+            },
+            "readinessProbe": {
+              "httpGet": {
+                "path": "/health",
+                "port": 9000
+              },
+              "initialDelaySeconds": 5,
+              "timeoutSeconds": 3,
+              "periodSeconds": 5,
+              "failureThreshold": 6
+            },
+            "startupProbe": {
+              "httpGet": {
+                "path": "/health",
+                "port": 9000
+              },
+              "initialDelaySeconds": 15,
+              "periodSeconds": 10,
+              "failureThreshold": 30
+            },
+            "imagePullPolicy": "Always"
+          }
+        ],
+        "securityContext": {
+          "runAsUser": 1000,
+          "runAsGroup": 1000,
+          "fsGroup": 1000
+        }
+      }
+    },
+    "strategy": {
+      "type": "Recreate"
+    }
+  },
+  "status": {}
+}
