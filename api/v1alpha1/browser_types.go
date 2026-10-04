@@ -38,9 +38,7 @@ type BrowserSpec struct {
 	// Proxy configures the HTTP proxy for the browser. Passed to the pod as
 	// BROWSER_PROXY_* env and applied to the default browser at startup.
 	// A username or password set here reaches the browser container as env and is
-	// readable by anyone who can connect to the browser. The platform sets only
-	// server=http://127.0.0.1:3128 (the control sidecar's relay) and keeps proxy
-	// logins in the spec.control Secret.
+	// readable by anyone who can connect to the browser.
 	// +optional
 	Proxy *ProxySpec `json:"proxy,omitempty"`
 
@@ -78,9 +76,10 @@ type BrowserSpec struct {
 	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
 
 	// Control adds the control sidecar to the browser pod: it holds proxy logins,
-	// relays the browser's traffic when spec.proxy points at it, and serves
-	// profile snapshots. It reads its settings from the named Secret, which is
-	// mounted into the sidecar only. When omitted, the pod is rendered without it.
+	// serves profile snapshots and, whenever spec.proxy is also set, runs a relay
+	// that passes no traffic until its config arrives. It reads its settings from
+	// the named Secret, which is mounted into the sidecar only. When omitted, the
+	// pod is rendered without it.
 	// +optional
 	Control *ControlSpec `json:"control,omitempty"`
 }
@@ -89,6 +88,9 @@ type BrowserSpec struct {
 type ControlSpec struct {
 	// SecretName is the Secret in the Browser's namespace that holds the
 	// sidecar's key, config and proxy logins. Only the sidecar mounts it.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`
 	SecretName string `json:"secretName"`
 }
 
