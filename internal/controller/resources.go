@@ -348,9 +348,11 @@ func keeperVolumes(browser *browserv1.Browser) []corev1.Volume {
 func keeperContainer(browser *browserv1.Browser, image, pullPolicy string) corev1.Container {
 	always := corev1.ContainerRestartPolicyAlways
 	env := []corev1.EnvVar{{Name: "KEEPER_LAUNCHER", Value: keeperLauncher}}
-	if browser.Spec.Proxy != nil {
+	if browser.Spec.Proxy != nil && browser.Spec.Proxy.Server != "" {
 		// The browser is pointed at the relay: refuse traffic until a
-		// config is applied instead of sending it direct.
+		// config is applied instead of sending it direct. Same test as the
+		// browser's own BROWSER_PROXY_SERVER, so the relay is never on for a
+		// browser that does not use it.
 		env = append(env, corev1.EnvVar{Name: "KEEPER_RELAY", Value: "required"})
 	}
 	return corev1.Container{

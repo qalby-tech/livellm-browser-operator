@@ -194,6 +194,21 @@ func TestKeeperRelayOnlyWithProxy(t *testing.T) {
 	}
 }
 
+// An empty proxy server (the CRD allows it) gives the browser no proxy, so
+// the relay must not be required either: both follow spec.proxy.server.
+func TestKeeperRelayFollowsProxyServer(t *testing.T) {
+	b := controlBrowser(true)
+	b.Spec.Proxy.Server = ""
+	d, _ := renderBrowser(b)
+	pod := d.Spec.Template.Spec
+	if _, ok := findEnv(pod.InitContainers[0].Env, "KEEPER_RELAY"); ok {
+		t.Error("KEEPER_RELAY with an empty spec.proxy.server")
+	}
+	if _, ok := findEnv(pod.Containers[0].Env, "BROWSER_PROXY_SERVER"); ok {
+		t.Error("BROWSER_PROXY_SERVER with an empty spec.proxy.server")
+	}
+}
+
 // Without spec.control nothing of the sidecar renders, even with a proxy:
 // the existing spec.proxy behaviour is kept as is.
 func TestNoControlNoSidecar(t *testing.T) {

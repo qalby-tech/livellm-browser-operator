@@ -115,7 +115,7 @@ logins out of the browser container, use the control sidecar below and point
 
 ### Control sidecar
 
-`spec.control` adds a second container, `keeper`, to the browser pod. It holds
+`spec.control` adds a control sidecar to the browser pod. It holds
 proxy logins and relays the browser's traffic (`127.0.0.1:3128`), rotates
 between proxies, and takes profile snapshots. It reads its key and settings
 from the named Secret, which only the sidecar mounts.
@@ -132,14 +132,14 @@ With `spec.control` set the operator renders:
 
 | What | Value |
 |---|---|
-| sidecar | native sidecar (`initContainers`, `restartPolicy: Always`), same image as the browser, `/usr/local/bin/livellm-keeper`, port `keeper` 9300 |
+| sidecar | native sidecar (`initContainers`, `restartPolicy: Always`), same image as the browser (its sidecar binary), port 9300 |
 | sidecar security | uid/gid 1000, read-only root filesystem, no privilege escalation, all capabilities dropped |
 | sidecar resources | requests 25m / 48Mi, limits 300m / 192Mi |
-| sidecar mounts | the profile volume, the Secret (optional, mode 0440) at `/etc/livellm/keeper`, a memory `emptyDir` (8Mi) at `/run/keeper`; the last two in the sidecar only |
-| sidecar env | `KEEPER_LAUNCHER=http://127.0.0.1:9000`; `KEEPER_RELAY=required` when `spec.proxy` is set (the relay refuses traffic until it has settings) |
+| sidecar mounts | the profile volume, the Secret (optional, mode 0440) and a memory `emptyDir` (8Mi); the last two in the sidecar only |
+| sidecar env | the launcher address; with `spec.proxy.server` set, the relay is required (it refuses traffic until it has settings) |
 | sidecar probes | startup: TCP 9300 every 1s, 30 tries; liveness: `GET /healthz` every 20s; no readiness probe |
 | browser container | no privilege escalation and all capabilities dropped (so `sudo` doesn't work in it) |
-| Service | an extra port `keeper` 9300 (never exposed by an Ingress) |
+| Service | an extra port 9300 (never exposed by an Ingress) |
 
 The browser image must contain the sidecar binary (livellm-browser 2.3.0 or
 later). Without `spec.control` the pod and Service are rendered exactly as
