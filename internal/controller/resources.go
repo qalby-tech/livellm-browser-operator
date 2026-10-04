@@ -18,8 +18,13 @@ const (
 	vncPort         = 5901
 	novncPort       = 6901
 	cdpPort         = 9222
+	keeperPort      = 9300
 	profileMountDir = "/home/headless/Desktop/app/profiles"
 	cookiesMountDir = "/etc/livellm/cookies"
+	keeperSecretDir = "/etc/livellm/keeper"
+	keeperRunDir    = "/run/keeper"
+	keeperBinary    = "/usr/local/bin/livellm-keeper"
+	keeperLauncher  = "http://127.0.0.1:9000"
 	defaultStorage  = "1Gi"
 	defaultShmSize  = "4Gi"
 
@@ -176,6 +181,23 @@ func applyDeploymentSpec(deploy *appsv1.Deployment, browser *browserv1.Browser, 
 		volumeMounts = append(volumeMounts, *mount)
 	}
 
+	// The control sidecar (spec.control): a native sidecar that starts before
+	// the browser and alone mounts its Secret and state. Without spec.control
+	// none of this renders, so existing pods stay byte-identical.
+	var initContainers []corev1.Container
+	var browserSecurity *corev1.SecurityContext
+	if browser.Spec.Control != nil {
+		volumes = append(volumes, keeperVolumes(browser)...)
+		initContainers = []corev1.Container{keeperContainer(browser, image, pullPolicy)}
+		// No privilege escalation (sudo stops working) and no capabilities
+		// (no NET_RAW): nothing in the browser container can reach the
+		// sidecar's files or traffic.
+		browserSecurity = &corev1.SecurityContext{
+			AllowPrivilegeEscalation: boolPtr(false),
+			Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+		}
+	}
+
 	deploy.Labels = lbls
 	deploy.Spec = appsv1.DeploymentSpec{
 		Replicas: &replicas,
@@ -190,11 +212,13 @@ func applyDeploymentSpec(deploy *appsv1.Deployment, browser *browserv1.Browser, 
 					RunAsGroup: int64Ptr(headlessGID),
 					FSGroup:    int64Ptr(headlessGID),
 				},
+				InitContainers: initContainers,
 				Containers: []corev1.Container{
 					{
 						Name:            "browser",
 						Image:           image,
 						ImagePullPolicy: corev1.PullPolicy(pullPolicy),
+						SecurityContext: browserSecurity,
 						Ports: []corev1.ContainerPort{
 							{Name: "vnc", ContainerPort: vncPort},
 							{Name: "novnc", ContainerPort: novncPort},
@@ -267,14 +291,114 @@ func applyServiceSpec(svc *corev1.Service, browser *browserv1.Browser) {
 	// (ztunnel, pod IP) passes clean. Opt the Service out of the waypoint:
 	// CDP/VNC are not user HTTP and lose nothing but broken framing.
 	svc.Labels["istio.io/use-waypoint"] = "none"
+	ports := []corev1.ServicePort{
+		{Name: "launcher", Port: int32(launcherPort), TargetPort: intstr.FromInt32(int32(launcherPort))},
+		{Name: "vnc", Port: vncPort, TargetPort: intstr.FromInt32(vncPort)},
+		{Name: "novnc", Port: novncPort, TargetPort: intstr.FromInt32(novncPort)},
+		{Name: "cdp", Port: cdpPort, TargetPort: intstr.FromInt32(cdpPort)},
+	}
+	if browser.Spec.Control != nil {
+		ports = append(ports, corev1.ServicePort{
+			Name: "keeper", Port: keeperPort, TargetPort: intstr.FromInt32(keeperPort), Protocol: corev1.ProtocolTCP,
+		})
+	}
 	svc.Spec = corev1.ServiceSpec{
 		Selector: sel,
 		Type:     corev1.ServiceTypeClusterIP,
-		Ports: []corev1.ServicePort{
-			{Name: "launcher", Port: int32(launcherPort), TargetPort: intstr.FromInt32(int32(launcherPort))},
-			{Name: "vnc", Port: vncPort, TargetPort: intstr.FromInt32(vncPort)},
-			{Name: "novnc", Port: novncPort, TargetPort: intstr.FromInt32(novncPort)},
-			{Name: "cdp", Port: cdpPort, TargetPort: intstr.FromInt32(cdpPort)},
+		Ports:    ports,
+	}
+}
+
+// ────────────────────────────────────────────────────────────
+// Control sidecar
+// ────────────────────────────────────────────────────────────
+
+// keeperVolumes returns the sidecar-only volumes: its Secret (optional, so
+// the pod starts before the Secret exists; the sidecar waits for it) and an
+// in-memory state directory.
+func keeperVolumes(browser *browserv1.Browser) []corev1.Volume {
+	mode := int32(0o440)
+	return []corev1.Volume{
+		{
+			Name: "keeper-secret",
+			VolumeSource: corev1.VolumeSource{
+				Secret: &corev1.SecretVolumeSource{
+					SecretName:  browser.Spec.Control.SecretName,
+					Optional:    boolPtr(true),
+					DefaultMode: &mode,
+				},
+			},
+		},
+		{
+			Name: "keeper-run",
+			VolumeSource: corev1.VolumeSource{
+				EmptyDir: &corev1.EmptyDirVolumeSource{
+					Medium:    corev1.StorageMediumMemory,
+					SizeLimit: resourcePtr(resource.MustParse("8Mi")),
+				},
+			},
+		},
+	}
+}
+
+// keeperContainer is the control sidecar: an init container with
+// restartPolicy Always, so it is up before the browser starts and restarts
+// on its own. It has no readiness probe: a settings error is reported by the
+// sidecar, never by taking the browser out of its Service.
+func keeperContainer(browser *browserv1.Browser, image, pullPolicy string) corev1.Container {
+	always := corev1.ContainerRestartPolicyAlways
+	env := []corev1.EnvVar{{Name: "KEEPER_LAUNCHER", Value: keeperLauncher}}
+	if browser.Spec.Proxy != nil {
+		// The browser is pointed at the relay: refuse traffic until a
+		// config is applied instead of sending it direct.
+		env = append(env, corev1.EnvVar{Name: "KEEPER_RELAY", Value: "required"})
+	}
+	return corev1.Container{
+		Name:            "keeper",
+		Image:           image,
+		ImagePullPolicy: corev1.PullPolicy(pullPolicy),
+		Command:         []string{keeperBinary},
+		RestartPolicy:   &always,
+		Ports:           []corev1.ContainerPort{{Name: "keeper", ContainerPort: keeperPort}},
+		Env:             env,
+		Resources: corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("25m"),
+				corev1.ResourceMemory: resource.MustParse("48Mi"),
+			},
+			Limits: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("300m"),
+				corev1.ResourceMemory: resource.MustParse("192Mi"),
+			},
+		},
+		SecurityContext: &corev1.SecurityContext{
+			RunAsUser:                int64Ptr(headlessUID),
+			RunAsGroup:               int64Ptr(headlessGID),
+			ReadOnlyRootFilesystem:   boolPtr(true),
+			AllowPrivilegeEscalation: boolPtr(false),
+			Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+		},
+		VolumeMounts: []corev1.VolumeMount{
+			{Name: "profile-data", MountPath: profileMountDir},
+			{Name: "keeper-secret", MountPath: keeperSecretDir, ReadOnly: true},
+			{Name: "keeper-run", MountPath: keeperRunDir},
+		},
+		StartupProbe: &corev1.Probe{
+			ProbeHandler: corev1.ProbeHandler{
+				TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt32(keeperPort)},
+			},
+			PeriodSeconds:    1,
+			FailureThreshold: 30,
+		},
+		LivenessProbe: &corev1.Probe{
+			ProbeHandler: corev1.ProbeHandler{
+				HTTPGet: &corev1.HTTPGetAction{
+					Path: "/healthz",
+					Port: intstr.FromInt32(keeperPort),
+				},
+			},
+			PeriodSeconds:    20,
+			FailureThreshold: 3,
 		},
 	}
 }

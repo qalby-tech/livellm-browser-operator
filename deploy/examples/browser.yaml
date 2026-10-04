@@ -39,6 +39,12 @@ spec:
   #   password: "pass"
   #   bypass: "localhost,127.0.0.1"
 
+  # Optional: the control sidecar (needs browser image 2.3.0+). Its key and
+  # settings come from this Secret, mounted into the sidecar only. Pair it with
+  # proxy.server "http://127.0.0.1:3128" so proxy logins stay in the Secret.
+  # control:
+  #   secretName: my-browser-control
+
   # Optional: Chrome Web Store extension IDs to install at creation time
   # extensions:
   #   - "cjpalhdlnbpafiamejdnhcphjbkeiagm"   # uBlock Origin
