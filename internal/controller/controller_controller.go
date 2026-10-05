@@ -116,10 +116,23 @@ func (r *ControllerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		}
 	}
 
-	// A camoufox controller with no image to run renders nothing.
+	// A camoufox controller with no image to run renders nothing (and
+	// registers nothing); one already running keeps its image and stays
+	// managed (registry, replicas, env, status).
+	image, pullPolicy := r.controllerImage(&ctrlCR)
+	var notes []string
 	if !r.engineOffered(&ctrlCR) {
-		return r.setControllerStatus(ctx, &ctrlCR, browserv1.ControllerPhaseCreating,
-			notOfferedMessage, nil, 0, 0, controllerRequeueReady)
+		kept, keptPolicy, ok, err := r.runningCamoufoxAPIImage(ctx, &ctrlCR)
+		if err != nil {
+			logger.Error(err, "failed to read the controller Deployment")
+			return ctrl.Result{RequeueAfter: controllerRequeueRetry}, nil
+		}
+		if !ok {
+			return r.setControllerStatus(ctx, &ctrlCR, browserv1.ControllerPhaseCreating,
+				notOfferedMessage, []browserv1.RegisteredBrowser{}, 0, 0, controllerRequeueReady)
+		}
+		image, pullPolicy = kept, keptPolicy
+		notes = append(notes, "Camoufox isn't offered on this platform; this Browser API keeps the image it runs")
 	}
 
 	// Write the browser registry first so it exists before the controller
@@ -128,7 +141,7 @@ func (r *ControllerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		logger.Error(err, "failed to ensure the browser registry")
 		return ctrl.Result{RequeueAfter: controllerRequeueRetry}, nil
 	}
-	if err := r.ensureControllerDeployment(ctx, &ctrlCR); err != nil {
+	if err := r.ensureControllerDeployment(ctx, &ctrlCR, image, pullPolicy); err != nil {
 		logger.Error(err, "failed to ensure controller Deployment")
 		return ctrl.Result{RequeueAfter: controllerRequeueRetry}, nil
 	}
@@ -137,7 +150,33 @@ func (r *ControllerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{RequeueAfter: controllerRequeueRetry}, nil
 	}
 
-	return r.reconcileControllerStatus(ctx, &ctrlCR)
+	return r.reconcileControllerStatus(ctx, &ctrlCR, notes...)
+}
+
+// runningCamoufoxAPIImage returns the image and pull policy of the
+// controller's existing Deployment when that Deployment was rendered for
+// camoufox (its controller container has BROWSER_ENGINE=camoufox). ok is
+// false when there is no such Deployment.
+func (r *ControllerReconciler) runningCamoufoxAPIImage(ctx context.Context, ctrlCR *browserv1.Controller) (image, pullPolicy string, ok bool, err error) {
+	var deploy appsv1.Deployment
+	err = r.Get(ctx, types.NamespacedName{Name: ctrlCR.Name, Namespace: ctrlCR.Namespace}, &deploy)
+	if apierrors.IsNotFound(err) {
+		return "", "", false, nil
+	}
+	if err != nil {
+		return "", "", false, err
+	}
+	for _, c := range deploy.Spec.Template.Spec.Containers {
+		if c.Name != "controller" || c.Image == "" {
+			continue
+		}
+		for _, e := range c.Env {
+			if e.Name == "BROWSER_ENGINE" && isCamoufox(e.Value) {
+				return c.Image, string(c.ImagePullPolicy), true, nil
+			}
+		}
+	}
+	return "", "", false, nil
 }
 
 func (r *ControllerReconciler) handleControllerDeletion(ctx context.Context, ctrlCR *browserv1.Controller) (ctrl.Result, error) {
@@ -151,12 +190,11 @@ func (r *ControllerReconciler) handleControllerDeletion(ctx context.Context, ctr
 	return ctrl.Result{}, nil
 }
 
-func (r *ControllerReconciler) ensureControllerDeployment(ctx context.Context, ctrlCR *browserv1.Controller) error {
+func (r *ControllerReconciler) ensureControllerDeployment(ctx context.Context, ctrlCR *browserv1.Controller, image, pullPolicy string) error {
 	deploy := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{Name: ctrlCR.Name, Namespace: ctrlCR.Namespace},
 	}
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, deploy, func() error {
-		image, pullPolicy := r.controllerImage(ctrlCR)
 		applyControllerDeploymentSpec(deploy, ctrlCR, image, pullPolicy, r.DefaultControllerEnv, r.DefaultControllerResources)
 		return controllerutil.SetControllerReference(ctrlCR, deploy, r.Scheme)
 	})
@@ -445,7 +483,7 @@ func (r *ControllerReconciler) ensureControllerService(ctx context.Context, ctrl
 	return err
 }
 
-func (r *ControllerReconciler) reconcileControllerStatus(ctx context.Context, ctrlCR *browserv1.Controller) (ctrl.Result, error) {
+func (r *ControllerReconciler) reconcileControllerStatus(ctx context.Context, ctrlCR *browserv1.Controller, extra ...string) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
 	var podList corev1.PodList
@@ -466,8 +504,12 @@ func (r *ControllerReconciler) reconcileControllerStatus(ctx context.Context, ct
 	}
 
 	if readyPod == nil {
+		message := "Waiting for controller pod to be ready"
+		if len(extra) > 0 {
+			message += ". " + strings.Join(extra, ". ")
+		}
 		return r.setControllerStatus(ctx, ctrlCR, browserv1.ControllerPhaseCreating,
-			"Waiting for controller pod to be ready", nil, 0, 0, controllerRequeuePending)
+			message, nil, 0, 0, controllerRequeuePending)
 	}
 
 	_, registered, notes, err := r.collectBrowsers(ctx, ctrlCR)
@@ -494,6 +536,7 @@ func (r *ControllerReconciler) reconcileControllerStatus(ctx context.Context, ct
 	}
 
 	message := "Controller is ready"
+	notes = append(notes, extra...)
 	if len(notes) > 0 {
 		message += ". " + strings.Join(notes, ". ")
 	}
@@ -632,7 +675,8 @@ func (r *ControllerReconciler) autoscaleBrowsers(
 		if tmpl.ShmSize != "" {
 			browser.Spec.ShmSize = tmpl.ShmSize
 		}
-		if len(tmpl.Extensions) > 0 {
+		// A camoufox browser takes no extensions.
+		if len(tmpl.Extensions) > 0 && !isCamoufox(ctrlCR.Spec.Engine) {
 			browser.Spec.Extensions = tmpl.Extensions
 		}
 		if len(tmpl.Env) > 0 {

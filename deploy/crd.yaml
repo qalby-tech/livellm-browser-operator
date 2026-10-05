@@ -334,6 +334,10 @@ spec:
             required:
             - profileUid
             type: object
+            x-kubernetes-validations:
+            - message: a browser's engine can't change after creation
+              rule: '(has(self.engine) ? self.engine : ''chrome'') == (has(oldSelf.engine)
+                ? oldSelf.engine : ''chrome'')'
           status:
             description: BrowserStatus defines the observed state of a Browser.
             properties:

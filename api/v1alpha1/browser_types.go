@@ -6,6 +6,7 @@ import (
 )
 
 // BrowserSpec defines the desired state of a Browser instance.
+// +kubebuilder:validation:XValidation:rule="(has(self.engine) ? self.engine : 'chrome') == (has(oldSelf.engine) ? oldSelf.engine : 'chrome')",message="a browser's engine can't change after creation"
 type BrowserSpec struct {
 	// ProfileUID is the unique profile identifier used as browser_id in the controller.
 	// Defaults to the CR name if empty.

@@ -168,9 +168,19 @@ browser or controller renders exactly as before the field existed.
 Pull policies: `DEFAULT_CAMOUFOX_PULL_POLICY` and
 `DEFAULT_CAMOUFOX_API_PULL_POLICY`. With no camoufox image configured and no
 `spec.image`, a camoufox Browser or Controller renders nothing and its
-`status.message` reads "Camoufox isn't offered on this platform". A controller
-autoscales browsers of its own engine, and a named `browsers` entry of the
+`status.message` reads "Camoufox isn't offered on this platform" (a controller
+then lists no registered browsers). One that already runs keeps the image it
+runs and stays managed (stop, edits, registry), with a note in
+`status.message`. A controller autoscales browsers of its own engine (without
+the template's extensions when camoufox), and a named `browsers` entry of the
 other engine is left out with a note.
+
+The engine can't change after creation: the Browser CRD refuses an update
+that changes `spec.engine` (absent counts as chrome). A camoufox browser's
+profile disk carries the annotation `livellm.io/engine: camoufox`; a Browser
+without the camoufox engine on such a disk is never rendered as chrome. Its
+Deployment and Service are left as they are (only `spec.running=false` still
+scales it to zero), `status.wsUrl` is cleared, and `status.message` says why.
 
 ### Pinning to nodes
 

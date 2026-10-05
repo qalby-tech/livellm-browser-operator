@@ -143,11 +143,19 @@ func buildPVC(browser *browserv1.Browser) *corev1.PersistentVolumeClaim {
 		storage = defaultStorage
 	}
 
+	// A camoufox disk records its engine, so a chrome browser is never
+	// started on it (a chrome disk carries no annotation, as before).
+	var annotations map[string]string
+	if isCamoufox(browser.Spec.Engine) {
+		annotations = map[string]string{engineAnnotation: browserv1.EngineCamoufox}
+	}
+
 	return &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("%s-profile", browser.Name),
-			Namespace: browser.Namespace,
-			Labels:    labels(browser.Name),
+			Name:        fmt.Sprintf("%s-profile", browser.Name),
+			Namespace:   browser.Namespace,
+			Labels:      labels(browser.Name),
+			Annotations: annotations,
 		},
 		Spec: corev1.PersistentVolumeClaimSpec{
 			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},

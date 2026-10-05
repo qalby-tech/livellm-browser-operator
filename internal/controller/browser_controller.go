@@ -61,13 +61,28 @@ func (r *BrowserReconciler) engineOffered(browser *browserv1.Browser) bool {
 	return !isCamoufox(browser.Spec.Engine) || browser.Spec.Image != "" || r.DefaultCamoufoxImage != ""
 }
 
+// keptImageNote is added to the status of a camoufox browser that keeps
+// running on the image it already had after the platform stopped offering
+// camoufox (no DEFAULT_CAMOUFOX_IMAGE and no spec.image).
+const keptImageNote = "Camoufox isn't offered on this platform; this browser keeps the image it runs"
+
+// engineAnnotation records a camoufox browser's engine on its profile disk
+// (set at creation, camoufox only: a chrome disk carries none).
+const engineAnnotation = "livellm.io/engine"
+
+// foreignDiskMessage is the status of a chrome browser whose profile disk
+// holds a camoufox profile: Chrome would open a Firefox profile, so nothing
+// is rendered or changed.
+const foreignDiskMessage = "This browser's profile disk holds a Camoufox profile, so it can't run Chrome; it is left as it is"
+
 // browserMessage appends the browser's notes to a status message. A chrome
 // browser has none, so its messages are unchanged.
-func browserMessage(browser *browserv1.Browser, msg string) string {
+func browserMessage(browser *browserv1.Browser, msg string, extra ...string) string {
 	var notes []string
 	if isCamoufox(browser.Spec.Engine) && len(browser.Spec.Extensions) > 0 {
 		notes = append(notes, "Camoufox browsers take no extensions; the ones set are not installed")
 	}
+	notes = append(notes, extra...)
 	if len(notes) == 0 {
 		return msg
 	}
@@ -106,17 +121,39 @@ func (r *BrowserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		}
 	}
 
-	// 4. A camoufox browser with no image to run renders nothing.
-	if !r.engineOffered(&browser) {
-		return r.reconcileNotOffered(ctx, &browser)
+	// 4. A chrome browser on a camoufox profile disk (the engine was dropped
+	// from the spec: a hand edit, a rolled-back writer or CRD) is never
+	// started on it. Only a stop still reaches the Deployment.
+	if foreign, err := r.diskHoldsCamoufox(ctx, &browser); err != nil {
+		logger.Error(err, "failed to read the profile disk")
+		return ctrl.Result{RequeueAfter: requeueRetry}, nil
+	} else if foreign {
+		return r.reconcileHeld(ctx, &browser, foreignDiskMessage)
 	}
 
-	// 5. Ensure child resources exist
+	// 5. A camoufox browser with no image to run renders nothing; one already
+	// running keeps its image and stays managed (stop, edits, status).
+	image, pullPolicy := r.browserImage(&browser)
+	var notes []string
+	if !r.engineOffered(&browser) {
+		kept, keptPolicy, ok, err := r.runningCamoufoxImage(ctx, &browser)
+		if err != nil {
+			logger.Error(err, "failed to read the browser Deployment")
+			return ctrl.Result{RequeueAfter: requeueRetry}, nil
+		}
+		if !ok {
+			return r.reconcileNotOffered(ctx, &browser)
+		}
+		image, pullPolicy = kept, keptPolicy
+		notes = append(notes, keptImageNote)
+	}
+
+	// 6. Ensure child resources exist
 	if err := r.ensurePVC(ctx, &browser); err != nil {
 		logger.Error(err, "failed to ensure PVC")
 		return ctrl.Result{RequeueAfter: requeueRetry}, nil
 	}
-	if err := r.ensureDeployment(ctx, &browser); err != nil {
+	if err := r.ensureDeployment(ctx, &browser, image, pullPolicy); err != nil {
 		logger.Error(err, "failed to ensure Deployment")
 		return ctrl.Result{RequeueAfter: requeueRetry}, nil
 	}
@@ -125,8 +162,95 @@ func (r *BrowserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{RequeueAfter: requeueRetry}, nil
 	}
 
-	// 6. Reconcile browser status (pod readiness)
-	return r.reconcileStatus(ctx, &browser)
+	// 7. Reconcile browser status (pod readiness)
+	return r.reconcileStatus(ctx, &browser, notes...)
+}
+
+// diskHoldsCamoufox is true when a chrome browser's profile disk was made for
+// a camoufox browser (it carries engineAnnotation). A missing disk, or a disk
+// without the annotation, is not foreign.
+func (r *BrowserReconciler) diskHoldsCamoufox(ctx context.Context, browser *browserv1.Browser) (bool, error) {
+	if isCamoufox(browser.Spec.Engine) {
+		return false, nil
+	}
+	var pvc corev1.PersistentVolumeClaim
+	err := r.Get(ctx, types.NamespacedName{Name: fmt.Sprintf("%s-profile", browser.Name), Namespace: browser.Namespace}, &pvc)
+	if apierrors.IsNotFound(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return isCamoufox(pvc.Annotations[engineAnnotation]), nil
+}
+
+// runningCamoufoxImage returns the image and pull policy of the browser's
+// existing Deployment when that Deployment was rendered for camoufox (its
+// browser container has AUTOMATION_PORT). ok is false when there is no such
+// Deployment: a Deployment rendered for chrome never lends its image.
+func (r *BrowserReconciler) runningCamoufoxImage(ctx context.Context, browser *browserv1.Browser) (image, pullPolicy string, ok bool, err error) {
+	var deploy appsv1.Deployment
+	err = r.Get(ctx, types.NamespacedName{Name: browser.Name, Namespace: browser.Namespace}, &deploy)
+	if apierrors.IsNotFound(err) {
+		return "", "", false, nil
+	}
+	if err != nil {
+		return "", "", false, err
+	}
+	for _, c := range deploy.Spec.Template.Spec.Containers {
+		if c.Name != "browser" || c.Image == "" {
+			continue
+		}
+		for _, e := range c.Env {
+			if e.Name == "AUTOMATION_PORT" {
+				return c.Image, string(c.ImagePullPolicy), true, nil
+			}
+		}
+	}
+	return "", "", false, nil
+}
+
+// reconcileHeld reports a browser the operator must not render (message says
+// why) and touches nothing but the replica count: a stop (spec.running=false)
+// still scales an existing Deployment to zero. The automation address is
+// cleared so no Browser API drives it.
+func (r *BrowserReconciler) reconcileHeld(ctx context.Context, browser *browserv1.Browser, message string) (ctrl.Result, error) {
+	phase := browserv1.BrowserPhaseCreating
+	if !browserWorkloadWanted(browser) {
+		phase = browserv1.BrowserPhaseStopped
+		var deploy appsv1.Deployment
+		err := r.Get(ctx, types.NamespacedName{Name: browser.Name, Namespace: browser.Namespace}, &deploy)
+		switch {
+		case apierrors.IsNotFound(err):
+		case err != nil:
+			return ctrl.Result{}, err
+		case deploy.Spec.Replicas == nil || *deploy.Spec.Replicas != 0:
+			zero := int32(0)
+			deploy.Spec.Replicas = &zero
+			if err := r.Update(ctx, &deploy); err != nil {
+				if apierrors.IsConflict(err) {
+					return ctrl.Result{Requeue: true}, nil
+				}
+				return ctrl.Result{}, err
+			}
+		}
+	}
+	if browser.Status.Phase != phase ||
+		browser.Status.Message != message ||
+		browser.Status.PodName != "" ||
+		browser.Status.WsURL != "" {
+		browser.Status.Phase = phase
+		browser.Status.Message = message
+		browser.Status.PodName = ""
+		browser.Status.WsURL = ""
+		if err := r.Status().Update(ctx, browser); err != nil {
+			if apierrors.IsConflict(err) {
+				return ctrl.Result{Requeue: true}, nil
+			}
+			return ctrl.Result{}, err
+		}
+	}
+	return ctrl.Result{RequeueAfter: requeueReady}, nil
 }
 
 // ────────────────────────────────────────────────────────────
@@ -188,7 +312,7 @@ func (r *BrowserReconciler) ensurePVC(ctx context.Context, browser *browserv1.Br
 	return r.Create(ctx, pvc)
 }
 
-func (r *BrowserReconciler) ensureDeployment(ctx context.Context, browser *browserv1.Browser) error {
+func (r *BrowserReconciler) ensureDeployment(ctx context.Context, browser *browserv1.Browser, image, pullPolicy string) error {
 	deploy := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      browser.Name,
@@ -197,7 +321,6 @@ func (r *BrowserReconciler) ensureDeployment(ctx context.Context, browser *brows
 	}
 
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, deploy, func() error {
-		image, pullPolicy := r.browserImage(browser)
 		applyDeploymentSpec(deploy, browser, image, pullPolicy, r.DefaultBrowserEnv, r.DefaultBrowserResources)
 		if err := controllerutil.SetControllerReference(browser, deploy, r.Scheme); err != nil {
 			return err
@@ -232,9 +355,9 @@ func (r *BrowserReconciler) ensureService(ctx context.Context, browser *browserv
 // Status reconciliation
 // ────────────────────────────────────────────────────────────
 
-func (r *BrowserReconciler) reconcileStatus(ctx context.Context, browser *browserv1.Browser) (ctrl.Result, error) {
+func (r *BrowserReconciler) reconcileStatus(ctx context.Context, browser *browserv1.Browser, notes ...string) (ctrl.Result, error) {
 	if !browserWorkloadWanted(browser) {
-		return r.reconcileStoppedStatus(ctx, browser)
+		return r.reconcileStoppedStatus(ctx, browser, notes...)
 	}
 
 	var podList corev1.PodList
@@ -255,7 +378,7 @@ func (r *BrowserReconciler) reconcileStatus(ctx context.Context, browser *browse
 	}
 
 	if readyPod == nil {
-		return r.setStatus(ctx, browser, browserv1.BrowserPhaseCreating, browserMessage(browser, "Waiting for browser pod to be ready"), requeuePending)
+		return r.setStatus(ctx, browser, browserv1.BrowserPhaseCreating, browserMessage(browser, "Waiting for browser pod to be ready", notes...), requeuePending)
 	}
 
 	profileUID := browser.Spec.ProfileUID
@@ -263,12 +386,12 @@ func (r *BrowserReconciler) reconcileStatus(ctx context.Context, browser *browse
 		profileUID = browser.Name
 	}
 
-	return r.reconcileBrowserState(ctx, browser, readyPod, profileUID)
+	return r.reconcileBrowserState(ctx, browser, readyPod, profileUID, notes...)
 }
 
 // reconcileNotOffered reports a camoufox browser the platform can't run (no
-// camoufox image configured). Nothing is created; anything already there is
-// left alone.
+// camoufox image configured) and that has no camoufox Deployment yet.
+// Nothing is created.
 func (r *BrowserReconciler) reconcileNotOffered(ctx context.Context, browser *browserv1.Browser) (ctrl.Result, error) {
 	if browser.Status.Phase != browserv1.BrowserPhaseCreating ||
 		browser.Status.Message != notOfferedMessage ||
@@ -289,8 +412,8 @@ func (r *BrowserReconciler) reconcileNotOffered(ctx context.Context, browser *br
 }
 
 // reconcileStoppedStatus updates status when spec.running is false (Deployment scaled to 0).
-func (r *BrowserReconciler) reconcileStoppedStatus(ctx context.Context, browser *browserv1.Browser) (ctrl.Result, error) {
-	msg := "Scaled to zero (spec.running=false)"
+func (r *BrowserReconciler) reconcileStoppedStatus(ctx context.Context, browser *browserv1.Browser, notes ...string) (ctrl.Result, error) {
+	msg := browserMessage(browser, "Scaled to zero (spec.running=false)", notes...)
 	if browser.Status.Phase != browserv1.BrowserPhaseStopped ||
 		browser.Status.Message != msg ||
 		browser.Status.PodName != "" ||
@@ -335,7 +458,7 @@ func (r *BrowserReconciler) setStatus(
 // Deterministic state
 // ────────────────────────────────────────────────────────────
 
-func (r *BrowserReconciler) reconcileBrowserState(ctx context.Context, browser *browserv1.Browser, readyPod *corev1.Pod, profileUID string) (ctrl.Result, error) {
+func (r *BrowserReconciler) reconcileBrowserState(ctx context.Context, browser *browserv1.Browser, readyPod *corev1.Pod, profileUID string, notes ...string) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
 	// One browser per pod with a fixed CDP proxy port fronted by a stable
@@ -343,7 +466,7 @@ func (r *BrowserReconciler) reconcileBrowserState(ctx context.Context, browser *
 	// in-pod proxy rewrites the ws path across Chrome restarts and the Service
 	// keeps a stable DNS name across pod restarts.
 	wsURL := browserWsURL(browser, profileUID)
-	message := browserMessage(browser, "Browser is ready")
+	message := browserMessage(browser, "Browser is ready", notes...)
 
 	if browser.Status.Phase != browserv1.BrowserPhaseRunning ||
 		browser.Status.WsURL != wsURL ||
