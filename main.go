@@ -93,13 +93,12 @@ func main() {
 		setupLog.Info("default controller pull policy configured", "pullPolicy", defaultControllerPullPolicy)
 	}
 
-	// Camoufox images (the chart sets them once the platform builds them).
-	// Unset: camoufox browsers and controllers render nothing and say so.
+	// The Camoufox browser image (the chart sets it once the platform builds
+	// it). Unset: camoufox browsers render nothing and say so. One Browser API
+	// image (DEFAULT_CONTROLLER_IMAGE) drives browsers of both engines.
 	defaultCamoufoxImage := os.Getenv("DEFAULT_CAMOUFOX_IMAGE")
 	defaultCamoufoxPullPolicy := os.Getenv("DEFAULT_CAMOUFOX_PULL_POLICY")
-	defaultCamoufoxAPIImage := os.Getenv("DEFAULT_CAMOUFOX_API_IMAGE")
-	defaultCamoufoxAPIPullPolicy := os.Getenv("DEFAULT_CAMOUFOX_API_PULL_POLICY")
-	setupLog.Info("camoufox images", "browser", defaultCamoufoxImage, "controller", defaultCamoufoxAPIImage)
+	setupLog.Info("camoufox browser image", "image", defaultCamoufoxImage)
 
 	defaultBrowserEnv := parseEnvVars("DEFAULT_BROWSER_ENV")
 	defaultControllerEnv := parseEnvVars("DEFAULT_CONTROLLER_ENV")
@@ -133,9 +132,6 @@ func main() {
 		DefaultBrowserImage:         defaultBrowserImage,
 		DefaultBrowserPullPolicy:    defaultBrowserPullPolicy,
 		DefaultBrowserEnv:           defaultBrowserEnv,
-
-		DefaultCamoufoxAPIImage:      defaultCamoufoxAPIImage,
-		DefaultCamoufoxAPIPullPolicy: defaultCamoufoxAPIPullPolicy,
 	}
 	if err := controllerReconciler.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Controller")

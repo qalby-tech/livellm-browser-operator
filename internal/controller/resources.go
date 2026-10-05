@@ -37,39 +37,14 @@ const (
 // playwrightPath is the camoufox browser's stable Playwright endpoint.
 const playwrightPath = "/playwright/default"
 
-// notOfferedMessage is the status message of a camoufox Browser or Controller
-// when the platform has no camoufox image configured (nothing is rendered).
+// notOfferedMessage is the status message of a camoufox Browser when the
+// platform has no camoufox image configured (nothing is rendered).
 const notOfferedMessage = "Camoufox isn't offered on this platform"
 
 // isCamoufox reports whether an engine value means camoufox; anything else
 // (absent, "chrome") is chrome and renders exactly as before engines existed.
 func isCamoufox(engine string) bool {
 	return engine == browserv1.EngineCamoufox
-}
-
-// browserEngine returns the browser's engine, "chrome" when absent.
-func browserEngine(b *browserv1.Browser) string {
-	if isCamoufox(b.Spec.Engine) {
-		return browserv1.EngineCamoufox
-	}
-	return browserv1.EngineChrome
-}
-
-// controllerEngine returns the engine of the browsers a controller drives,
-// "chrome" when absent.
-func controllerEngine(c *browserv1.Controller) string {
-	if isCamoufox(c.Spec.Engine) {
-		return browserv1.EngineCamoufox
-	}
-	return browserv1.EngineChrome
-}
-
-// engineName is the product name of an engine, for status notes.
-func engineName(engine string) string {
-	if isCamoufox(engine) {
-		return "Camoufox"
-	}
-	return "Chrome"
 }
 
 // automationPortName is the browser container's and Service's automation

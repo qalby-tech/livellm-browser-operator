@@ -149,10 +149,9 @@ before.
 ### Engines (Chrome, Camoufox)
 
 `spec.engine` picks the browser engine: `chrome` (absent means chrome) or
-`camoufox` (Firefox-based, driven with Playwright). A `Controller` takes the
-same field and drives only browsers of its engine. The engine is set when the
+`camoufox` (Firefox-based, driven with Playwright). The engine is set when the
 browser is made and doesn't change afterwards. A chrome (or engine-less)
-browser or controller renders exactly as before the field existed.
+browser renders exactly as before the field existed.
 
 | | Chrome | Camoufox |
 |---|---|---|
@@ -161,19 +160,27 @@ browser or controller renders exactly as before the field existed.
 | `status.wsUrl` | `ws://<name>.<ns>.svc.cluster.local:9222/devtools/browser/<profileUid>` | `ws://<name>.<ns>.svc.cluster.local:9222/playwright/default` |
 | control sidecar | as described above | the same, set to serve a Camoufox profile |
 | `spec.extensions` | installed | not installed (`status.message` says so) |
-| controller image (no `spec.image`) | `DEFAULT_CONTROLLER_IMAGE` | `DEFAULT_CAMOUFOX_API_IMAGE`, env `BROWSER_ENGINE=camoufox` |
-| controller registry entry | `"<id>": "<wsUrl>"` | `"<id>": {"wsUrl": "<wsUrl>", "engine": "camoufox"}` |
-| controller `externalBrowsers` | registered | left out (`status.message` says so) |
 
-Pull policies: `DEFAULT_CAMOUFOX_PULL_POLICY` and
-`DEFAULT_CAMOUFOX_API_PULL_POLICY`. With no camoufox image configured and no
-`spec.image`, a camoufox Browser or Controller renders nothing and its
-`status.message` reads "Camoufox isn't offered on this platform" (a controller
-then lists no registered browsers). One that already runs keeps the image it
-runs and stays managed (stop, edits, registry), with a note in
-`status.message`. A controller autoscales browsers of its own engine (without
-the template's extensions when camoufox), and a named `browsers` entry of the
-other engine is left out with a note.
+The pull policy is `DEFAULT_CAMOUFOX_PULL_POLICY`. With no camoufox image
+configured and no `spec.image`, a camoufox Browser renders nothing and its
+`status.message` reads "Camoufox isn't offered on this platform". One that
+already runs keeps the image it runs and stays managed (stop, edits), with a
+note in `status.message`.
+
+A `Controller` has no engine: one controller image (`DEFAULT_CONTROLLER_IMAGE`)
+drives browsers of both engines, and one pool may hold both. Its pod renders
+the same whatever engines its members run. Each registry entry follows its
+own browser's engine:
+
+| member | registry entry |
+|---|---|
+| Chrome Browser | `"<id>": "<wsUrl>"` |
+| Camoufox Browser | `"<id>": {"wsUrl": "<wsUrl>", "engine": "camoufox"}` |
+| remote browser (`externalBrowsers`, Chrome) | `"<id>": "<wsUrl>"`, or `{"wsUrl": ..., "headers": {...}}` with a sign-in value |
+
+A Camoufox member needs a controller image that reads the `engine` entry
+(controller 2.6.0 or later); an older one leaves only that member unhealthy.
+Autoscaled browsers (`autoscaleBrowser`) are Chrome browsers.
 
 The engine can't change after creation: the Browser CRD refuses an update
 that changes `spec.engine` (absent counts as chrome). A camoufox browser's
@@ -208,9 +215,9 @@ controller mounts it at `BROWSERS_CONFIG` and resolves `X-Browser-Id` (and the
 `/browsers/<id>/` path) against it. Two browsers with the same id: the first
 (by name) is used and `status.message` says so.
 
-- `autodiscover` unset or `true`: every ready browser of the controller's
-  engine in the namespace (filtered by `browserSelector`). `false`: only
-  `browsers` and `externalBrowsers`.
+- `autodiscover` unset or `true`: every ready browser in the namespace, of
+  either engine (filtered by `browserSelector`). `false`: only `browsers`
+  (either engine) and `externalBrowsers`.
 - `externalBrowsers[].authHeader` (or `authHeaderSecretRef: {name, key}`, which
   wins; only a Secret labelled `livellm.io/remote-browser-auth: "true"` is
   read, any other counts as missing): `"Name: value"` when the text before the first `:` is a header name

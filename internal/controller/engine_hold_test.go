@@ -8,11 +8,8 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	browserv1 "github.com/livellm/browser-operator/api/v1alpha1"
 )
@@ -238,137 +235,5 @@ func TestChromeOnPlainDiskRenders(t *testing.T) {
 	d := getDeployment(t, r.Client, types.NamespacedName{Name: b.Name, Namespace: b.Namespace})
 	if img := d.Spec.Template.Spec.Containers[0].Image; img != "chrome:1" {
 		t.Errorf("image %q", img)
-	}
-}
-
-func newControllerReconcilerApps(t *testing.T, objs ...client.Object) *ControllerReconciler {
-	t.Helper()
-	scheme := runtime.NewScheme()
-	for _, add := range []func(*runtime.Scheme) error{browserv1.AddToScheme, corev1.AddToScheme, appsv1.AddToScheme} {
-		if err := add(scheme); err != nil {
-			t.Fatal(err)
-		}
-	}
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).
-		WithStatusSubresource(&browserv1.Browser{}, &browserv1.Controller{}).Build()
-	return &ControllerReconciler{Client: c, APIReader: c, Scheme: scheme, DefaultControllerImage: "ctl:1"}
-}
-
-// A camoufox Browser API already running when camoufox stops being offered
-// keeps its image, its registry stays current, and edits reach it.
-func TestCamoufoxControllerNotOfferedKeepsRunning(t *testing.T) {
-	cr := &browserv1.Controller{
-		ObjectMeta: metav1.ObjectMeta{Name: "fox", Namespace: "ns"},
-		Spec:       browserv1.ControllerSpec{Engine: "camoufox"},
-	}
-	r := newControllerReconcilerApps(t, cr)
-	r.DefaultCamoufoxAPIImage = "fox-api:1"
-	ctx := context.Background()
-	key := types.NamespacedName{Name: "fox", Namespace: "ns"}
-	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key}); err != nil {
-		t.Fatal(err)
-	}
-
-	r.DefaultCamoufoxAPIImage = ""
-	fox := engineBrowser("b1", "camoufox")
-	fox.Namespace = "ns"
-	fox.Status.WsURL = "ws://b1"
-	if err := r.Create(ctx, fox); err != nil {
-		t.Fatal(err)
-	}
-	var cur browserv1.Controller
-	if err := r.Get(ctx, key, &cur); err != nil {
-		t.Fatal(err)
-	}
-	cur.Spec.Env = []corev1.EnvVar{{Name: "EXTRA", Value: "1"}}
-	if err := r.Update(ctx, &cur); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key}); err != nil {
-		t.Fatal(err)
-	}
-
-	var d appsv1.Deployment
-	if err := r.Get(ctx, key, &d); err != nil {
-		t.Fatal(err)
-	}
-	c := d.Spec.Template.Spec.Containers[0]
-	if c.Image != "fox-api:1" {
-		t.Errorf("image %q, want the kept fox-api:1", c.Image)
-	}
-	if v, ok := findEnv(c.Env, "EXTRA"); !ok || v != "1" {
-		t.Errorf("env edit not applied: %q %v", v, ok)
-	}
-	var sec corev1.Secret
-	if err := r.Get(ctx, types.NamespacedName{Name: "fox-browsers", Namespace: "ns"}, &sec); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(sec.Data[browsersConfigFile]), `"b1"`) {
-		t.Errorf("registry not refreshed: %s", sec.Data[browsersConfigFile])
-	}
-	if err := r.Get(ctx, key, &cur); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(cur.Status.Message, "this Browser API keeps the image it runs") {
-		t.Errorf("message %q", cur.Status.Message)
-	}
-}
-
-// A camoufox Browser API with nothing rendered reports no registered
-// browsers, whatever an earlier status said.
-func TestCamoufoxControllerNotOfferedClearsRegistered(t *testing.T) {
-	cr := &browserv1.Controller{
-		ObjectMeta: metav1.ObjectMeta{Name: "fox", Namespace: "ns"},
-		Spec:       browserv1.ControllerSpec{Engine: "camoufox"},
-		Status: browserv1.ControllerStatus{
-			Phase:                  browserv1.ControllerPhaseRunning,
-			RegisteredBrowsers:     []browserv1.RegisteredBrowser{{Name: "b1", ProfileUID: "b1"}},
-			RegisteredBrowserCount: 1,
-		},
-	}
-	r := newControllerReconcilerApps(t, cr)
-	ctx := context.Background()
-	key := types.NamespacedName{Name: "fox", Namespace: "ns"}
-	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key}); err != nil {
-		t.Fatal(err)
-	}
-	var got browserv1.Controller
-	if err := r.Get(ctx, key, &got); err != nil {
-		t.Fatal(err)
-	}
-	if got.Status.Message != notOfferedMessage || len(got.Status.RegisteredBrowsers) != 0 || got.Status.RegisteredBrowserCount != 0 {
-		t.Errorf("status %+v", got.Status)
-	}
-}
-
-// An autoscaled camoufox browser gets no extensions from the template; a
-// chrome one still does.
-func TestAutoscaleCamoufoxSkipsExtensions(t *testing.T) {
-	yes := true
-	limit := int32(1)
-	for _, engine := range []string{"", "camoufox"} {
-		cr := &browserv1.Controller{
-			ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "ns", UID: "u"},
-			Spec: browserv1.ControllerSpec{
-				Engine: engine, AutoscaleBrowser: &yes, MaxPagesPerBrowser: &limit,
-				AutoscaleBrowserTemplate: &browserv1.AutoscaleBrowserTemplateSpec{Extensions: []string{"ext"}},
-			},
-		}
-		r := newReconciler(t, cr)
-		reg := []browserv1.RegisteredBrowser{{Name: "b", ProfileUID: "b"}}
-		if err := r.autoscaleBrowsers(context.Background(), cr, reg, map[string]int{"b": 1}); err != nil {
-			t.Fatal(err)
-		}
-		var got browserv1.Browser
-		if err := r.Get(context.Background(), client.ObjectKey{Namespace: "ns", Name: "api-autoscale-1"}, &got); err != nil {
-			t.Fatal(err)
-		}
-		want := 1
-		if engine == "camoufox" {
-			want = 0
-		}
-		if len(got.Spec.Extensions) != want {
-			t.Errorf("engine %q: extensions %v", engine, got.Spec.Extensions)
-		}
 	}
 }

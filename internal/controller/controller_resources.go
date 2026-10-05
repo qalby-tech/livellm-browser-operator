@@ -71,10 +71,6 @@ func applyControllerDeploymentSpec(deploy *appsv1.Deployment, ctrlCR *browserv1.
 	env := []corev1.EnvVar{
 		{Name: "BROWSERS_CONFIG", Value: browsersConfigMountDir + "/" + browsersConfigFile},
 	}
-	if isCamoufox(ctrlCR.Spec.Engine) {
-		// The controller drives its browsers with Playwright's Firefox client.
-		env = append(env, corev1.EnvVar{Name: "BROWSER_ENGINE", Value: browserv1.EngineCamoufox})
-	}
 	if !nodeOptionsOverridden {
 		env = append(env, corev1.EnvVar{Name: "NODE_OPTIONS", Value: fmt.Sprintf("--max-old-space-size=%d", heapMiB)})
 	}

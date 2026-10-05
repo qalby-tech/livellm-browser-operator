@@ -7,17 +7,8 @@ import (
 
 // ControllerSpec defines the desired state of a Controller deployment.
 type ControllerSpec struct {
-	// Engine is the engine of the browsers this controller drives: chrome or
-	// camoufox. Absent means chrome. It registers only Browsers of its engine
-	// and takes remote browsers only when chrome. It is set at creation by the
-	// platform and does not change afterwards.
-	// +kubebuilder:validation:Enum=chrome;camoufox
-	// +optional
-	Engine string `json:"engine,omitempty"`
-
 	// Image overrides the controller container image.
-	// If empty, the operator uses its configured default (DEFAULT_CONTROLLER_IMAGE,
-	// or DEFAULT_CAMOUFOX_API_IMAGE for a camoufox controller).
+	// If empty, the operator uses its configured default (DEFAULT_CONTROLLER_IMAGE env var).
 	// +optional
 	Image string `json:"image,omitempty"`
 
@@ -46,14 +37,12 @@ type ControllerSpec struct {
 	Autodiscover *bool `json:"autodiscover,omitempty"`
 
 	// Browsers is an explicit list of in-namespace Browser CR names to register
-	// with this controller (in addition to any autodiscovered ones). A named
-	// Browser of another engine is left out (status.message says so).
+	// with this controller (in addition to any autodiscovered ones).
 	// +optional
 	Browsers []string `json:"browsers,omitempty"`
 
 	// ExternalBrowsers are remote/BYO browsers reachable at a user-supplied CDP
-	// websocket endpoint, registered alongside in-cluster Browsers. A camoufox
-	// controller ignores them.
+	// websocket endpoint, registered alongside in-cluster Browsers.
 	// +optional
 	ExternalBrowsers []ExternalBrowser `json:"externalBrowsers,omitempty"`
 
@@ -84,6 +73,7 @@ type ControllerSpec struct {
 	// autoscaled browsers.  If empty, the operator copies the spec from the
 	// first manually-defined Browser CR in the same namespace (matched by
 	// browserSelector).  At a minimum, profileUid is generated automatically.
+	// Autoscaled browsers are Chrome browsers.
 	// +optional
 	AutoscaleBrowserTemplate *AutoscaleBrowserTemplateSpec `json:"autoscaleBrowserTemplate,omitempty"`
 

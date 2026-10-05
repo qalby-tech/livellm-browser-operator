@@ -237,7 +237,10 @@ func engineBrowser(name, engine string) *browserv1.Browser {
 	return b
 }
 
-func TestCollectBrowsersEngineFilter(t *testing.T) {
+// A pool holds browsers of both engines: autodiscover and named members
+// register every engine, each entry in its own engine's shape, and remote
+// browsers sit next to Camoufox members.
+func TestCollectBrowsersMixedPool(t *testing.T) {
 	no := false
 	r := newReconciler(t,
 		engineBrowser("c1", ""),
@@ -245,224 +248,147 @@ func TestCollectBrowsersEngineFilter(t *testing.T) {
 		engineBrowser("f1", "camoufox"),
 		engineBrowser("f2", "camoufox"),
 	)
-	ctx := context.Background()
+	fox := func(id string) map[string]interface{} {
+		return map[string]interface{}{"wsUrl": "ws://" + id, "engine": "camoufox"}
+	}
+	remote := []browserv1.ExternalBrowser{
+		{ID: "cloud", WsURL: "wss://a", AuthHeader: "Bearer x"},
+		{ID: "open", WsURL: "wss://b"},
+	}
 	cases := []struct {
-		name      string
-		engine    string
-		auto      *bool
-		list      []string
-		want      []string
-		wantNotes []string
+		name        string
+		auto        *bool
+		list        []string
+		ext         []browserv1.ExternalBrowser
+		want        []string
+		wantEntries map[string]interface{}
 	}{
-		{"chrome autodiscover sees chrome only", "", nil, nil, []string{"c1", "c2"}, nil},
-		{"explicit chrome is chrome", "chrome", nil, nil, []string{"c1", "c2"}, nil},
-		{"camoufox autodiscover sees camoufox only", "camoufox", nil, nil, []string{"f1", "f2"}, nil},
-		{"chrome named members: camoufox left out", "", &no, []string{"c1", "f1"}, []string{"c1"},
-			[]string{"browser f1 runs Camoufox; this Browser API drives Chrome browsers, so it is left out"}},
-		{"camoufox named members: chrome left out", "camoufox", &no, []string{"f2", "c2", "c2"}, []string{"f2"},
-			[]string{"browser c2 runs Chrome; this Browser API drives Camoufox browsers, so it is left out"}},
-		{"named mismatch noted with autodiscover on", "camoufox", nil, []string{"c1"}, []string{"f1", "f2"},
-			[]string{"browser c1 runs Chrome; this Browser API drives Camoufox browsers, so it is left out"}},
+		{"autodiscover registers both engines", nil, nil, nil, []string{"c1", "c2", "f1", "f2"},
+			map[string]interface{}{"c1": "ws://c1", "c2": "ws://c2", "f1": fox("f1"), "f2": fox("f2")}},
+		{"named members of either engine", &no, []string{"f2", "c1"}, nil, []string{"f2", "c1"},
+			map[string]interface{}{"c1": "ws://c1", "f2": fox("f2")}},
+		{"remote browsers next to a camoufox member", &no, []string{"f1"}, remote, []string{"f1", "cloud", "open"},
+			map[string]interface{}{
+				"f1":    fox("f1"),
+				"cloud": map[string]interface{}{"wsUrl": "wss://a", "headers": map[string]string{"Authorization": "Bearer x"}},
+				"open":  "wss://b",
+			}},
 	}
 	for _, c := range cases {
 		cr := &browserv1.Controller{
 			ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "ns"},
-			Spec:       browserv1.ControllerSpec{Engine: c.engine, Autodiscover: c.auto, Browsers: c.list},
+			Spec:       browserv1.ControllerSpec{Autodiscover: c.auto, Browsers: c.list, ExternalBrowsers: c.ext},
 		}
-		entries, reg, notes, err := r.collectBrowsers(ctx, cr)
+		entries, reg, notes, err := r.collectBrowsers(context.Background(), cr)
 		if err != nil {
 			t.Fatalf("%s: %v", c.name, err)
 		}
 		if got := ids(reg); !reflect.DeepEqual(got, c.want) {
 			t.Errorf("%s: registered %v, want %v", c.name, got, c.want)
 		}
-		if len(entries) != len(c.want) {
-			t.Errorf("%s: entries %v", c.name, entries)
+		if !reflect.DeepEqual(entries, c.wantEntries) {
+			t.Errorf("%s: entries %#v, want %#v", c.name, entries, c.wantEntries)
 		}
-		if !reflect.DeepEqual(notes, c.wantNotes) {
-			t.Errorf("%s: notes %q, want %q", c.name, notes, c.wantNotes)
+		if len(notes) != 0 {
+			t.Errorf("%s: notes %q", c.name, notes)
 		}
 	}
 }
 
 func TestBrowsersRegistryEntryShapes(t *testing.T) {
-	no := false
 	ctx := context.Background()
-
-	// Chrome: plain strings, unchanged.
-	ch := &browserv1.Controller{
+	cr := &browserv1.Controller{
 		ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "ns", UID: "u1"},
-		Spec:       browserv1.ControllerSpec{Autodiscover: &no, Browsers: []string{"c1"}},
+		Spec: browserv1.ControllerSpec{ExternalBrowsers: []browserv1.ExternalBrowser{
+			{ID: "cloud", WsURL: "wss://a", AuthHeader: "Bearer x"},
+		}},
 	}
-	r := newReconciler(t, ch, engineBrowser("c1", ""), engineBrowser("f1", "camoufox"))
-	if err := r.ensureBrowsersRegistry(ctx, ch); err != nil {
+	r := newReconciler(t, cr, engineBrowser("c1", ""), engineBrowser("f1", "camoufox"))
+	if err := r.ensureBrowsersRegistry(ctx, cr); err != nil {
 		t.Fatal(err)
 	}
 	var sec corev1.Secret
 	if err := r.Get(ctx, client.ObjectKey{Namespace: "ns", Name: "api-browsers"}, &sec); err != nil {
 		t.Fatal(err)
 	}
-	if got := string(sec.Data[browsersConfigFile]); got != `{"browsers":{"c1":"ws://c1"}}` {
+	want := `{"browsers":{"c1":"ws://c1","cloud":{"headers":{"Authorization":"Bearer x"},"wsUrl":"wss://a"},"f1":{"engine":"camoufox","wsUrl":"ws://f1"}}}`
+	if got := string(sec.Data[browsersConfigFile]); got != want {
+		t.Errorf("registry %s, want %s", got, want)
+	}
+
+	// A Chrome-only pool keeps plain strings, as before engines existed.
+	ch := &browserv1.Controller{ObjectMeta: metav1.ObjectMeta{Name: "ch", Namespace: "ns", UID: "u2"}}
+	r = newReconciler(t, ch, engineBrowser("c1", ""), engineBrowser("c2", "chrome"))
+	if err := r.ensureBrowsersRegistry(ctx, ch); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Get(ctx, client.ObjectKey{Namespace: "ns", Name: "ch-browsers"}, &sec); err != nil {
+		t.Fatal(err)
+	}
+	if got := string(sec.Data[browsersConfigFile]); got != `{"browsers":{"c1":"ws://c1","c2":"ws://c2"}}` {
 		t.Errorf("chrome registry %s", got)
 	}
-
-	// Camoufox: {wsUrl, engine}.
-	cf := &browserv1.Controller{
-		ObjectMeta: metav1.ObjectMeta{Name: "fox", Namespace: "ns", UID: "u2"},
-		Spec:       browserv1.ControllerSpec{Engine: "camoufox"},
-	}
-	r = newReconciler(t, cf, engineBrowser("c1", ""), engineBrowser("f1", "camoufox"))
-	if err := r.ensureBrowsersRegistry(ctx, cf); err != nil {
-		t.Fatal(err)
-	}
-	if err := r.Get(ctx, client.ObjectKey{Namespace: "ns", Name: "fox-browsers"}, &sec); err != nil {
-		t.Fatal(err)
-	}
-	if got := string(sec.Data[browsersConfigFile]); got != `{"browsers":{"f1":{"engine":"camoufox","wsUrl":"ws://f1"}}}` {
-		t.Errorf("camoufox registry %s", got)
-	}
 }
 
-func TestCamoufoxControllerIgnoresRemoteBrowsers(t *testing.T) {
-	r := newReconciler(t, engineBrowser("f1", "camoufox"))
-	for _, c := range []struct {
-		ext  []browserv1.ExternalBrowser
-		note string
-	}{
-		{[]browserv1.ExternalBrowser{{ID: "cloud", WsURL: "wss://a", AuthHeader: "Bearer x"}},
-			"the remote browser is left out: remote browsers go only in a Chrome Browser API"},
-		{[]browserv1.ExternalBrowser{{ID: "a", WsURL: "wss://a"}, {ID: "b", WsURL: "wss://b"}},
-			"the 2 remote browsers are left out: remote browsers go only in a Chrome Browser API"},
-	} {
-		cr := &browserv1.Controller{
-			ObjectMeta: metav1.ObjectMeta{Name: "fox", Namespace: "ns"},
-			Spec:       browserv1.ControllerSpec{Engine: "camoufox", ExternalBrowsers: c.ext},
+// The Browser API pod is the same whatever engines its members run: one
+// image, no engine env.
+func TestControllerDeploymentEngineBlind(t *testing.T) {
+	render := func(objs ...client.Object) appsv1.Deployment {
+		cr := &browserv1.Controller{ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "ns"}}
+		scheme := runtime.NewScheme()
+		for _, add := range []func(*runtime.Scheme) error{browserv1.AddToScheme, corev1.AddToScheme, appsv1.AddToScheme} {
+			if err := add(scheme); err != nil {
+				t.Fatal(err)
+			}
 		}
-		entries, reg, notes, err := r.collectBrowsers(context.Background(), cr)
-		if err != nil {
+		c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(append(objs, cr)...).
+			WithStatusSubresource(&browserv1.Controller{}).Build()
+		r := &ControllerReconciler{Client: c, APIReader: c, Scheme: scheme, DefaultControllerImage: "ctl:1", DefaultControllerPullPolicy: "Always"}
+		key := types.NamespacedName{Name: "api", Namespace: "ns"}
+		if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key}); err != nil {
 			t.Fatal(err)
 		}
-		if got := ids(reg); !reflect.DeepEqual(got, []string{"f1"}) || len(entries) != 1 {
-			t.Errorf("registered %v entries %v", got, entries)
+		var d appsv1.Deployment
+		if err := r.Get(context.Background(), key, &d); err != nil {
+			t.Fatal(err)
 		}
-		if !reflect.DeepEqual(notes, []string{c.note}) {
-			t.Errorf("notes %q, want %q", notes, c.note)
-		}
+		return d
+	}
+	chrome := render(engineBrowser("c1", ""))
+	mixed := render(engineBrowser("c1", ""), engineBrowser("f1", "camoufox"))
+	if !reflect.DeepEqual(chrome.Spec, mixed.Spec) {
+		t.Error("a pool with a camoufox member renders a different Browser API pod")
+	}
+	ct := mixed.Spec.Template.Spec.Containers[0]
+	if ct.Image != "ctl:1" || ct.ImagePullPolicy != corev1.PullAlways {
+		t.Errorf("image %q %q", ct.Image, ct.ImagePullPolicy)
+	}
+	if v, ok := findEnv(ct.Env, "BROWSER_ENGINE"); ok {
+		t.Errorf("BROWSER_ENGINE=%q rendered", v)
 	}
 }
 
-func TestAutoscaleCopiesEngine(t *testing.T) {
+// Autoscaled browsers are Chrome browsers and take the template's extensions.
+func TestAutoscaleIsChrome(t *testing.T) {
 	yes := true
 	limit := int32(1)
-	for _, engine := range []string{"", "camoufox"} {
-		cr := &browserv1.Controller{
-			ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "ns", UID: "u"},
-			Spec: browserv1.ControllerSpec{
-				Engine: engine, AutoscaleBrowser: &yes, MaxPagesPerBrowser: &limit,
-			},
-		}
-		r := newReconciler(t, cr)
-		reg := []browserv1.RegisteredBrowser{{Name: "b", ProfileUID: "b"}}
-		if err := r.autoscaleBrowsers(context.Background(), cr, reg, map[string]int{"b": 1}); err != nil {
-			t.Fatal(err)
-		}
-		var got browserv1.Browser
-		if err := r.Get(context.Background(), client.ObjectKey{Namespace: "ns", Name: "api-autoscale-1"}, &got); err != nil {
-			t.Fatal(err)
-		}
-		if got.Spec.Engine != engine {
-			t.Errorf("controller engine %q: autoscaled browser engine %q", engine, got.Spec.Engine)
-		}
-	}
-}
-
-func TestControllerImageAndEnvByEngine(t *testing.T) {
-	r := &ControllerReconciler{
-		DefaultControllerImage: "ctl:1", DefaultControllerPullPolicy: "Always",
-		DefaultCamoufoxAPIImage: "fox-api:1", DefaultCamoufoxAPIPullPolicy: "IfNotPresent",
-	}
-	for _, c := range []struct {
-		engine, spec, wantImg, wantPP string
-		wantEnv                       bool
-	}{
-		{"", "", "ctl:1", "Always", false},
-		{"chrome", "", "ctl:1", "Always", false},
-		{"camoufox", "", "fox-api:1", "IfNotPresent", true},
-		{"camoufox", "own:2", "own:2", "IfNotPresent", true},
-	} {
-		cr := &browserv1.Controller{
-			ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "ns"},
-			Spec:       browserv1.ControllerSpec{Engine: c.engine, Image: c.spec},
-		}
-		img, pp := r.controllerImage(cr)
-		var d appsv1.Deployment
-		applyControllerDeploymentSpec(&d, cr, img, pp, nil, nil)
-		ct := d.Spec.Template.Spec.Containers[0]
-		if ct.Image != c.wantImg || string(ct.ImagePullPolicy) != c.wantPP {
-			t.Errorf("engine %q: image %q %q", c.engine, ct.Image, ct.ImagePullPolicy)
-		}
-		v, ok := findEnv(ct.Env, "BROWSER_ENGINE")
-		if ok != c.wantEnv || (ok && v != "camoufox") {
-			t.Errorf("engine %q: BROWSER_ENGINE %q %v", c.engine, v, ok)
-		}
-	}
-
-	// Explicit chrome renders exactly as absent.
-	var d1, d2 appsv1.Deployment
-	cr := &browserv1.Controller{ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "ns"}}
-	applyControllerDeploymentSpec(&d1, cr, "ctl:1", "Always", nil, nil)
-	cr.Spec.Engine = "chrome"
-	applyControllerDeploymentSpec(&d2, cr, "ctl:1", "Always", nil, nil)
-	if !reflect.DeepEqual(d1, d2) {
-		t.Error("engine chrome controller renders differently from no engine")
-	}
-}
-
-func TestCamoufoxControllerNotOffered(t *testing.T) {
 	cr := &browserv1.Controller{
-		ObjectMeta: metav1.ObjectMeta{Name: "fox", Namespace: "ns"},
-		Spec:       browserv1.ControllerSpec{Engine: "camoufox"},
+		ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "ns", UID: "u"},
+		Spec: browserv1.ControllerSpec{
+			AutoscaleBrowser: &yes, MaxPagesPerBrowser: &limit,
+			AutoscaleBrowserTemplate: &browserv1.AutoscaleBrowserTemplateSpec{Extensions: []string{"ext"}},
+		},
 	}
-	scheme := runtime.NewScheme()
-	for _, add := range []func(*runtime.Scheme) error{browserv1.AddToScheme, corev1.AddToScheme, appsv1.AddToScheme} {
-		if err := add(scheme); err != nil {
-			t.Fatal(err)
-		}
-	}
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cr).
-		WithStatusSubresource(&browserv1.Controller{}).Build()
-	r := &ControllerReconciler{Client: c, APIReader: c, Scheme: scheme, DefaultControllerImage: "ctl:1"}
-	ctx := context.Background()
-	key := types.NamespacedName{Name: "fox", Namespace: "ns"}
-	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key}); err != nil {
+	r := newReconciler(t, cr, engineBrowser("f1", "camoufox"))
+	reg := []browserv1.RegisteredBrowser{{Name: "f1", ProfileUID: "f1"}}
+	if err := r.autoscaleBrowsers(context.Background(), cr, reg, map[string]int{"f1": 1}); err != nil {
 		t.Fatal(err)
 	}
-	for _, obj := range []client.Object{&appsv1.Deployment{}, &corev1.Service{}} {
-		if err := r.Get(ctx, key, obj); !apierrors.IsNotFound(err) {
-			t.Errorf("%T rendered for a camoufox controller without an image (err %v)", obj, err)
-		}
-	}
-	var sec corev1.Secret
-	if err := r.Get(ctx, types.NamespacedName{Name: "fox-browsers", Namespace: "ns"}, &sec); !apierrors.IsNotFound(err) {
-		t.Errorf("registry written for a camoufox controller without an image (err %v)", err)
-	}
-	var got browserv1.Controller
-	if err := r.Get(ctx, key, &got); err != nil {
+	var got browserv1.Browser
+	if err := r.Get(context.Background(), client.ObjectKey{Namespace: "ns", Name: "api-autoscale-1"}, &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.Status.Message != "Camoufox isn't offered on this platform" {
-		t.Errorf("status %+v", got.Status)
-	}
-
-	r.DefaultCamoufoxAPIImage = "fox-api:1"
-	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key}); err != nil {
-		t.Fatal(err)
-	}
-	var d appsv1.Deployment
-	if err := r.Get(ctx, key, &d); err != nil {
-		t.Fatal(err)
-	}
-	if img := d.Spec.Template.Spec.Containers[0].Image; img != "fox-api:1" {
-		t.Errorf("image %q", img)
+	if got.Spec.Engine != "" || !reflect.DeepEqual(got.Spec.Extensions, []string{"ext"}) {
+		t.Errorf("autoscaled browser engine %q extensions %v", got.Spec.Engine, got.Spec.Extensions)
 	}
 }
