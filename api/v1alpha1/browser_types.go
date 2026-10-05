@@ -16,8 +16,15 @@ type BrowserSpec struct {
 	// +optional
 	Running *bool `json:"running,omitempty"`
 
+	// Engine is the browser engine: chrome or camoufox. Absent means chrome.
+	// It is set at creation by the platform and does not change afterwards.
+	// +kubebuilder:validation:Enum=chrome;camoufox
+	// +optional
+	Engine string `json:"engine,omitempty"`
+
 	// Image overrides the browser container image.
-	// If empty, the operator uses its configured default (DEFAULT_BROWSER_IMAGE env var).
+	// If empty, the operator uses its configured default (DEFAULT_BROWSER_IMAGE,
+	// or DEFAULT_CAMOUFOX_IMAGE for a camoufox browser).
 	// +optional
 	Image string `json:"image,omitempty"`
 
@@ -44,6 +51,7 @@ type BrowserSpec struct {
 
 	// Extensions is a list of Chrome Web Store extension IDs to install at creation time.
 	// The launcher downloads and injects them into the profile before Chrome starts.
+	// A camoufox browser takes no extensions: the field is ignored there.
 	// +optional
 	Extensions []string `json:"extensions,omitempty"`
 
@@ -140,6 +148,12 @@ type ResourcesSpec struct {
 	Limits map[string]string `json:"limits,omitempty"`
 }
 
+// Browser engines (spec.engine). An absent engine means EngineChrome.
+const (
+	EngineChrome   = "chrome"
+	EngineCamoufox = "camoufox"
+)
+
 // BrowserPhase describes the lifecycle phase of a Browser.
 // +kubebuilder:validation:Enum=Creating;Running;Stopped
 type BrowserPhase string
@@ -160,8 +174,10 @@ type BrowserStatus struct {
 	// +optional
 	PodName string `json:"podName,omitempty"`
 
-	// WsURL is the full CDP WebSocket URL:
-	// ws://<name>.<namespace>.svc.cluster.local:9222/devtools/browser/<id>
+	// WsURL is the browser's automation WebSocket URL: for chrome the CDP URL
+	// ws://<name>.<namespace>.svc.cluster.local:9222/devtools/browser/<id>, for
+	// camoufox the Playwright URL
+	// ws://<name>.<namespace>.svc.cluster.local:9222/playwright/default
 	// +optional
 	WsURL string `json:"wsUrl,omitempty"`
 

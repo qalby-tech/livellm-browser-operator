@@ -54,6 +54,24 @@ type ControllerReconciler struct {
 	DefaultBrowserImage         string
 	DefaultBrowserPullPolicy    string
 	DefaultBrowserEnv           []corev1.EnvVar
+	// DefaultCamoufoxAPIImage is the image of a camoufox controller without
+	// spec.image (DEFAULT_CAMOUFOX_API_IMAGE). Empty: camoufox isn't offered.
+	DefaultCamoufoxAPIImage      string
+	DefaultCamoufoxAPIPullPolicy string
+}
+
+// controllerImage returns the default image and pull policy for the
+// controller's engine (spec.image still wins in applyControllerDeploymentSpec).
+func (r *ControllerReconciler) controllerImage(ctrlCR *browserv1.Controller) (string, string) {
+	if isCamoufox(ctrlCR.Spec.Engine) {
+		return r.DefaultCamoufoxAPIImage, r.DefaultCamoufoxAPIPullPolicy
+	}
+	return r.DefaultControllerImage, r.DefaultControllerPullPolicy
+}
+
+// engineOffered is false for a camoufox controller with no image to run.
+func (r *ControllerReconciler) engineOffered(ctrlCR *browserv1.Controller) bool {
+	return !isCamoufox(ctrlCR.Spec.Engine) || ctrlCR.Spec.Image != "" || r.DefaultCamoufoxAPIImage != ""
 }
 
 func (r *ControllerReconciler) SetupWithManager(mgr ctrl.Manager) error {
@@ -98,6 +116,12 @@ func (r *ControllerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		}
 	}
 
+	// A camoufox controller with no image to run renders nothing.
+	if !r.engineOffered(&ctrlCR) {
+		return r.setControllerStatus(ctx, &ctrlCR, browserv1.ControllerPhaseCreating,
+			notOfferedMessage, nil, 0, 0, controllerRequeueReady)
+	}
+
 	// Write the browser registry first so it exists before the controller
 	// pod mounts it.
 	if err := r.ensureBrowsersRegistry(ctx, &ctrlCR); err != nil {
@@ -132,7 +156,8 @@ func (r *ControllerReconciler) ensureControllerDeployment(ctx context.Context, c
 		ObjectMeta: metav1.ObjectMeta{Name: ctrlCR.Name, Namespace: ctrlCR.Namespace},
 	}
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, deploy, func() error {
-		applyControllerDeploymentSpec(deploy, ctrlCR, r.DefaultControllerImage, r.DefaultControllerPullPolicy, r.DefaultControllerEnv, r.DefaultControllerResources)
+		image, pullPolicy := r.controllerImage(ctrlCR)
+		applyControllerDeploymentSpec(deploy, ctrlCR, image, pullPolicy, r.DefaultControllerEnv, r.DefaultControllerResources)
 		return controllerutil.SetControllerReference(ctrlCR, deploy, r.Scheme)
 	})
 	return err
@@ -222,11 +247,16 @@ func browserDisplayName(br *browserv1.Browser) string {
 //   - autodiscovered in-namespace Browsers (when autodiscover is nil/true; an
 //     explicit false is honoured), optionally filtered by browserSelector;
 //   - explicit in-namespace Browsers named in spec.browsers;
-//   - external/BYO browsers from spec.externalBrowsers.
+//   - external/BYO browsers from spec.externalBrowsers (chrome only).
 //
-// It returns the registry entries (id -> ws_url string, or {wsUrl,headers} for
-// BYO with auth), a parallel RegisteredBrowser list for status, and notes for
-// status.message (browsers that share an id, unusable sign-in values).
+// Only Browsers of the controller's engine are registered (absent means
+// chrome on both sides): a chrome controller never sees a camoufox browser,
+// and a camoufox controller never sees a chrome one.
+//
+// It returns the registry entries (id -> ws_url string, {wsUrl,headers} for
+// BYO with auth, or {wsUrl,engine} for a camoufox browser), a parallel
+// RegisteredBrowser list for status, and notes for status.message (browsers
+// that share an id, unusable sign-in values, members of another engine).
 func (r *ControllerReconciler) collectBrowsers(ctx context.Context, ctrlCR *browserv1.Controller) (map[string]interface{}, []browserv1.RegisteredBrowser, []string, error) {
 	entries := map[string]interface{}{}
 	registered := make([]browserv1.RegisteredBrowser, 0)
@@ -250,7 +280,19 @@ func (r *ControllerReconciler) collectBrowsers(ctx context.Context, ctrlCR *brow
 		return false
 	}
 
-	addLocal := func(br *browserv1.Browser) {
+	engine := controllerEngine(ctrlCR)
+	camoufox := isCamoufox(engine)
+	skipped := map[string]bool{} // named members of another engine, reported once
+
+	addLocal := func(br *browserv1.Browser, named bool) {
+		if be := browserEngine(br); be != engine {
+			if named && !skipped[br.Name] {
+				skipped[br.Name] = true
+				notes = append(notes, fmt.Sprintf("browser %s runs %s; this Browser API drives %s browsers, so it is left out",
+					browserDisplayName(br), engineName(be), engineName(engine)))
+			}
+			return
+		}
 		id := br.Spec.ProfileUID
 		if id == "" {
 			id = br.Name
@@ -261,7 +303,11 @@ func (r *ControllerReconciler) collectBrowsers(ctx context.Context, ctrlCR *brow
 		if !claim(id, br.Name, "browser "+browserDisplayName(br)) {
 			return
 		}
-		entries[id] = br.Status.WsURL
+		if camoufox {
+			entries[id] = map[string]interface{}{"wsUrl": br.Status.WsURL, "engine": browserv1.EngineCamoufox}
+		} else {
+			entries[id] = br.Status.WsURL
+		}
 		registered = append(registered, browserv1.RegisteredBrowser{Name: br.Name, ProfileUID: id})
 	}
 
@@ -278,7 +324,7 @@ func (r *ControllerReconciler) collectBrowsers(ctx context.Context, ctrlCR *brow
 		// List order is by name; keep it so "only X is used" is stable.
 		sort.Slice(browsers.Items, func(i, j int) bool { return browsers.Items[i].Name < browsers.Items[j].Name })
 		for i := range browsers.Items {
-			addLocal(&browsers.Items[i])
+			addLocal(&browsers.Items[i], false)
 		}
 	}
 
@@ -290,7 +336,20 @@ func (r *ControllerReconciler) collectBrowsers(ctx context.Context, ctrlCR *brow
 			}
 			return nil, nil, nil, err
 		}
-		addLocal(&br)
+		addLocal(&br, true)
+	}
+
+	if camoufox {
+		// Remote browsers are CDP endpoints: a camoufox controller can't
+		// drive them.
+		if n := len(ctrlCR.Spec.ExternalBrowsers); n > 0 {
+			what := "remote browser is"
+			if n > 1 {
+				what = fmt.Sprintf("%d remote browsers are", n)
+			}
+			notes = append(notes, fmt.Sprintf("the %s left out: remote browsers go only in a Chrome Browser API", what))
+		}
+		return entries, registered, notes, nil
 	}
 
 	for i, ext := range ctrlCR.Spec.ExternalBrowsers {
@@ -558,6 +617,11 @@ func (r *ControllerReconciler) autoscaleBrowsers(
 			ProfileUID:    profileUID,
 			ReclaimPolicy: "Delete",
 		},
+	}
+	// An autoscaled browser runs the controller's engine (left absent for
+	// chrome, as before engines existed).
+	if isCamoufox(ctrlCR.Spec.Engine) {
+		browser.Spec.Engine = browserv1.EngineCamoufox
 	}
 
 	if tmpl != nil {

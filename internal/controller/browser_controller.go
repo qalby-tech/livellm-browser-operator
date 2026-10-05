@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -39,6 +40,38 @@ type BrowserReconciler struct {
 	DefaultBrowserPullPolicy string
 	DefaultBrowserEnv        []corev1.EnvVar
 	DefaultBrowserResources  *browserv1.ResourcesSpec
+	// DefaultCamoufoxImage is the image of a camoufox browser without
+	// spec.image (DEFAULT_CAMOUFOX_IMAGE). Empty: camoufox isn't offered.
+	DefaultCamoufoxImage      string
+	DefaultCamoufoxPullPolicy string
+}
+
+// browserImage returns the default image and pull policy for the browser's
+// engine (spec.image still wins inside applyDeploymentSpec).
+func (r *BrowserReconciler) browserImage(browser *browserv1.Browser) (string, string) {
+	if isCamoufox(browser.Spec.Engine) {
+		return r.DefaultCamoufoxImage, r.DefaultCamoufoxPullPolicy
+	}
+	return r.DefaultBrowserImage, r.DefaultBrowserPullPolicy
+}
+
+// engineOffered is false for a camoufox browser with no image to run: no
+// spec.image and no DEFAULT_CAMOUFOX_IMAGE. Chrome is always offered.
+func (r *BrowserReconciler) engineOffered(browser *browserv1.Browser) bool {
+	return !isCamoufox(browser.Spec.Engine) || browser.Spec.Image != "" || r.DefaultCamoufoxImage != ""
+}
+
+// browserMessage appends the browser's notes to a status message. A chrome
+// browser has none, so its messages are unchanged.
+func browserMessage(browser *browserv1.Browser, msg string) string {
+	var notes []string
+	if isCamoufox(browser.Spec.Engine) && len(browser.Spec.Extensions) > 0 {
+		notes = append(notes, "Camoufox browsers take no extensions; the ones set are not installed")
+	}
+	if len(notes) == 0 {
+		return msg
+	}
+	return msg + ". " + strings.Join(notes, ". ")
 }
 
 // SetupWithManager registers the reconciler with the manager.
@@ -73,7 +106,12 @@ func (r *BrowserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		}
 	}
 
-	// 4. Ensure child resources exist
+	// 4. A camoufox browser with no image to run renders nothing.
+	if !r.engineOffered(&browser) {
+		return r.reconcileNotOffered(ctx, &browser)
+	}
+
+	// 5. Ensure child resources exist
 	if err := r.ensurePVC(ctx, &browser); err != nil {
 		logger.Error(err, "failed to ensure PVC")
 		return ctrl.Result{RequeueAfter: requeueRetry}, nil
@@ -87,7 +125,7 @@ func (r *BrowserReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{RequeueAfter: requeueRetry}, nil
 	}
 
-	// 5. Reconcile browser status (pod readiness)
+	// 6. Reconcile browser status (pod readiness)
 	return r.reconcileStatus(ctx, &browser)
 }
 
@@ -159,7 +197,8 @@ func (r *BrowserReconciler) ensureDeployment(ctx context.Context, browser *brows
 	}
 
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, deploy, func() error {
-		applyDeploymentSpec(deploy, browser, r.DefaultBrowserImage, r.DefaultBrowserPullPolicy, r.DefaultBrowserEnv, r.DefaultBrowserResources)
+		image, pullPolicy := r.browserImage(browser)
+		applyDeploymentSpec(deploy, browser, image, pullPolicy, r.DefaultBrowserEnv, r.DefaultBrowserResources)
 		if err := controllerutil.SetControllerReference(browser, deploy, r.Scheme); err != nil {
 			return err
 		}
@@ -216,7 +255,7 @@ func (r *BrowserReconciler) reconcileStatus(ctx context.Context, browser *browse
 	}
 
 	if readyPod == nil {
-		return r.setStatus(ctx, browser, browserv1.BrowserPhaseCreating, "Waiting for browser pod to be ready", requeuePending)
+		return r.setStatus(ctx, browser, browserv1.BrowserPhaseCreating, browserMessage(browser, "Waiting for browser pod to be ready"), requeuePending)
 	}
 
 	profileUID := browser.Spec.ProfileUID
@@ -225,6 +264,28 @@ func (r *BrowserReconciler) reconcileStatus(ctx context.Context, browser *browse
 	}
 
 	return r.reconcileBrowserState(ctx, browser, readyPod, profileUID)
+}
+
+// reconcileNotOffered reports a camoufox browser the platform can't run (no
+// camoufox image configured). Nothing is created; anything already there is
+// left alone.
+func (r *BrowserReconciler) reconcileNotOffered(ctx context.Context, browser *browserv1.Browser) (ctrl.Result, error) {
+	if browser.Status.Phase != browserv1.BrowserPhaseCreating ||
+		browser.Status.Message != notOfferedMessage ||
+		browser.Status.PodName != "" ||
+		browser.Status.WsURL != "" {
+		browser.Status.Phase = browserv1.BrowserPhaseCreating
+		browser.Status.Message = notOfferedMessage
+		browser.Status.PodName = ""
+		browser.Status.WsURL = ""
+		if err := r.Status().Update(ctx, browser); err != nil {
+			if apierrors.IsConflict(err) {
+				return ctrl.Result{Requeue: true}, nil
+			}
+			return ctrl.Result{}, err
+		}
+	}
+	return ctrl.Result{RequeueAfter: requeueReady}, nil
 }
 
 // reconcileStoppedStatus updates status when spec.running is false (Deployment scaled to 0).
@@ -281,16 +342,17 @@ func (r *BrowserReconciler) reconcileBrowserState(ctx context.Context, browser *
 	// Service — so the CDP ws_url is deterministic and never drifts. The
 	// in-pod proxy rewrites the ws path across Chrome restarts and the Service
 	// keeps a stable DNS name across pod restarts.
-	wsURL := fmt.Sprintf("ws://%s.%s.svc.cluster.local:%d/devtools/browser/%s",
-		browser.Name, browser.Namespace, cdpPort, profileUID)
+	wsURL := browserWsURL(browser, profileUID)
+	message := browserMessage(browser, "Browser is ready")
 
 	if browser.Status.Phase != browserv1.BrowserPhaseRunning ||
 		browser.Status.WsURL != wsURL ||
-		browser.Status.PodName != readyPod.Name {
+		browser.Status.PodName != readyPod.Name ||
+		browser.Status.Message != message {
 		browser.Status.Phase = browserv1.BrowserPhaseRunning
 		browser.Status.PodName = readyPod.Name
 		browser.Status.WsURL = wsURL
-		browser.Status.Message = "Browser is ready"
+		browser.Status.Message = message
 
 		if err := r.Status().Update(ctx, browser); err != nil {
 			if apierrors.IsConflict(err) {
@@ -302,4 +364,16 @@ func (r *BrowserReconciler) reconcileBrowserState(ctx context.Context, browser *
 	}
 
 	return ctrl.Result{RequeueAfter: requeueReady}, nil
+}
+
+// browserWsURL is the browser's in-cluster automation address: the CDP
+// browser URL for chrome, the Playwright server URL for camoufox. Both go
+// through the fixed automation port of the browser's Service.
+func browserWsURL(browser *browserv1.Browser, profileUID string) string {
+	if isCamoufox(browser.Spec.Engine) {
+		return fmt.Sprintf("ws://%s.%s.svc.cluster.local:%d%s",
+			browser.Name, browser.Namespace, cdpPort, playwrightPath)
+	}
+	return fmt.Sprintf("ws://%s.%s.svc.cluster.local:%d/devtools/browser/%s",
+		browser.Name, browser.Namespace, cdpPort, profileUID)
 }

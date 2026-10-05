@@ -3,12 +3,13 @@
 Kubernetes operator that manages **livellm browser** instances via Custom Resources.
 
 Each `Browser` CR results in:
-- a **Deployment** (one Chrome pod per browser)
+- a **Deployment** (one browser pod per browser: Chrome, or Camoufox with `spec.engine: camoufox`)
 - a **PVC** (persistent profile data)
 - a **Service** (launcher API access)
 
-The operator writes each browser's deterministic CDP WebSocket URL
-(`ws://<name>.<namespace>.svc.cluster.local:9222/devtools/browser/<profileUid>`)
+The operator writes each browser's deterministic automation WebSocket URL
+(Chrome: `ws://<name>.<namespace>.svc.cluster.local:9222/devtools/browser/<profileUid>`;
+Camoufox: `ws://<name>.<namespace>.svc.cluster.local:9222/playwright/default`)
 to `Browser` status. To connect the **livellm controller**, create a
 `Controller` CR in the same namespace — it deploys the controller and hands it
 the namespace's browsers through a registry Secret.
@@ -145,6 +146,32 @@ The browser image must contain the sidecar binary (livellm-browser 2.3.0 or
 later). Without `spec.control` the pod and Service are rendered exactly as
 before.
 
+### Engines (Chrome, Camoufox)
+
+`spec.engine` picks the browser engine: `chrome` (absent means chrome) or
+`camoufox` (Firefox-based, driven with Playwright). A `Controller` takes the
+same field and drives only browsers of its engine. The engine is set when the
+browser is made and doesn't change afterwards. A chrome (or engine-less)
+browser or controller renders exactly as before the field existed.
+
+| | Chrome | Camoufox |
+|---|---|---|
+| image (no `spec.image`) | `DEFAULT_BROWSER_IMAGE` | `DEFAULT_CAMOUFOX_IMAGE` |
+| automation port (container + Service) | `cdp` 9222, env `CDP_PORT` | `playwright` 9222, env `AUTOMATION_PORT` |
+| `status.wsUrl` | `ws://<name>.<ns>.svc.cluster.local:9222/devtools/browser/<profileUid>` | `ws://<name>.<ns>.svc.cluster.local:9222/playwright/default` |
+| control sidecar | as described above | the same, set to serve a Camoufox profile |
+| `spec.extensions` | installed | not installed (`status.message` says so) |
+| controller image (no `spec.image`) | `DEFAULT_CONTROLLER_IMAGE` | `DEFAULT_CAMOUFOX_API_IMAGE`, env `BROWSER_ENGINE=camoufox` |
+| controller registry entry | `"<id>": "<wsUrl>"` | `"<id>": {"wsUrl": "<wsUrl>", "engine": "camoufox"}` |
+| controller `externalBrowsers` | registered | left out (`status.message` says so) |
+
+Pull policies: `DEFAULT_CAMOUFOX_PULL_POLICY` and
+`DEFAULT_CAMOUFOX_API_PULL_POLICY`. With no camoufox image configured and no
+`spec.image`, a camoufox Browser or Controller renders nothing and its
+`status.message` reads "Camoufox isn't offered on this platform". A controller
+autoscales browsers of its own engine, and a named `browsers` entry of the
+other engine is left out with a note.
+
 ### Pinning to nodes
 
 Both kinds take `spec.nodeSelector`, a plain passthrough to the pod's
@@ -171,9 +198,9 @@ controller mounts it at `BROWSERS_CONFIG` and resolves `X-Browser-Id` (and the
 `/browsers/<id>/` path) against it. Two browsers with the same id: the first
 (by name) is used and `status.message` says so.
 
-- `autodiscover` unset or `true`: every ready browser in the namespace
-  (filtered by `browserSelector`). `false`: only `browsers` and
-  `externalBrowsers`.
+- `autodiscover` unset or `true`: every ready browser of the controller's
+  engine in the namespace (filtered by `browserSelector`). `false`: only
+  `browsers` and `externalBrowsers`.
 - `externalBrowsers[].authHeader` (or `authHeaderSecretRef: {name, key}`, which
   wins; only a Secret labelled `livellm.io/remote-browser-auth: "true"` is
   read, any other counts as missing): `"Name: value"` when the text before the first `:` is a header name

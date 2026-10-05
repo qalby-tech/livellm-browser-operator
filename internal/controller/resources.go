@@ -17,7 +17,7 @@ const (
 	launcherPort    = 9000
 	vncPort         = 5901
 	novncPort       = 6901
-	cdpPort         = 9222
+	cdpPort         = 9222 // the automation port: CDP (chrome) or Playwright (camoufox)
 	keeperPort      = 9300
 	profileMountDir = "/home/headless/Desktop/app/profiles"
 	cookiesMountDir = "/etc/livellm/cookies"
@@ -33,6 +33,53 @@ const (
 	headlessUID int64 = 1000
 	headlessGID int64 = 1000
 )
+
+// playwrightPath is the camoufox browser's stable Playwright endpoint.
+const playwrightPath = "/playwright/default"
+
+// notOfferedMessage is the status message of a camoufox Browser or Controller
+// when the platform has no camoufox image configured (nothing is rendered).
+const notOfferedMessage = "Camoufox isn't offered on this platform"
+
+// isCamoufox reports whether an engine value means camoufox; anything else
+// (absent, "chrome") is chrome and renders exactly as before engines existed.
+func isCamoufox(engine string) bool {
+	return engine == browserv1.EngineCamoufox
+}
+
+// browserEngine returns the browser's engine, "chrome" when absent.
+func browserEngine(b *browserv1.Browser) string {
+	if isCamoufox(b.Spec.Engine) {
+		return browserv1.EngineCamoufox
+	}
+	return browserv1.EngineChrome
+}
+
+// controllerEngine returns the engine of the browsers a controller drives,
+// "chrome" when absent.
+func controllerEngine(c *browserv1.Controller) string {
+	if isCamoufox(c.Spec.Engine) {
+		return browserv1.EngineCamoufox
+	}
+	return browserv1.EngineChrome
+}
+
+// engineName is the product name of an engine, for status notes.
+func engineName(engine string) string {
+	if isCamoufox(engine) {
+		return "Camoufox"
+	}
+	return "Chrome"
+}
+
+// automationPortName is the browser container's and Service's automation
+// port name: "cdp" for chrome, "playwright" for camoufox.
+func automationPortName(browser *browserv1.Browser) string {
+	if isCamoufox(browser.Spec.Engine) {
+		return "playwright"
+	}
+	return "cdp"
+}
 
 // labels returns the standard label set for all child resources.
 func labels(name string) map[string]string {
@@ -223,7 +270,7 @@ func applyDeploymentSpec(deploy *appsv1.Deployment, browser *browserv1.Browser, 
 							{Name: "vnc", ContainerPort: vncPort},
 							{Name: "novnc", ContainerPort: novncPort},
 							{Name: "launcher", ContainerPort: int32(launcherPort)},
-							{Name: "cdp", ContainerPort: cdpPort},
+							{Name: automationPortName(browser), ContainerPort: cdpPort},
 						},
 						Env: buildBrowserEnv(browser, defaultEnv, browser.Spec.Env),
 						Resources: corev1.ResourceRequirements{
@@ -295,7 +342,7 @@ func applyServiceSpec(svc *corev1.Service, browser *browserv1.Browser) {
 		{Name: "launcher", Port: int32(launcherPort), TargetPort: intstr.FromInt32(int32(launcherPort))},
 		{Name: "vnc", Port: vncPort, TargetPort: intstr.FromInt32(vncPort)},
 		{Name: "novnc", Port: novncPort, TargetPort: intstr.FromInt32(novncPort)},
-		{Name: "cdp", Port: cdpPort, TargetPort: intstr.FromInt32(cdpPort)},
+		{Name: automationPortName(browser), Port: cdpPort, TargetPort: intstr.FromInt32(cdpPort)},
 	}
 	if browser.Spec.Control != nil {
 		ports = append(ports, corev1.ServicePort{
@@ -354,6 +401,11 @@ func keeperContainer(browser *browserv1.Browser, image, pullPolicy string) corev
 		// browser's own BROWSER_PROXY_SERVER, so the relay is never on for a
 		// browser that does not use it.
 		env = append(env, corev1.EnvVar{Name: "KEEPER_RELAY", Value: "required"})
+	}
+	if isCamoufox(browser.Spec.Engine) {
+		// The sidecar serves a Firefox profile (its own manifest format and
+		// leave-outs). Unset means chrome, as before engines existed.
+		env = append(env, corev1.EnvVar{Name: "KEEPER_ENGINE", Value: browserv1.EngineCamoufox})
 	}
 	return corev1.Container{
 		Name:            "keeper",
@@ -416,17 +468,24 @@ func buildBrowserEnv(browser *browserv1.Browser, defaultEnv []corev1.EnvVar, ext
 	// Chrome and cause kubelet OOMKills. If a user really needs to tune the
 	// in-pod Node driver heap, they can pass NODE_OPTIONS via spec.env or
 	// DEFAULT_BROWSER_ENV.
+	camoufox := isCamoufox(browser.Spec.Engine)
+	// Pin the in-pod automation proxy to a fixed port; the Service targets
+	// it, so the controller's ws_url is deterministic (one browser per pod).
+	// Chrome's launcher reads CDP_PORT, Camoufox's AUTOMATION_PORT.
+	portEnv := "CDP_PORT"
+	if camoufox {
+		portEnv = "AUTOMATION_PORT"
+	}
 	env := []corev1.EnvVar{
 		{Name: "VNC_PW", Value: "headless"},
 		{Name: "VNC_RESOLUTION", Value: "1920x1080"},
 		{Name: "DISPLAY", Value: ":1"},
-		// Pin the in-pod CDP proxy to a fixed port; the Service targets it, so
-		// the controller's ws_url is deterministic (one browser per pod).
-		{Name: "CDP_PORT", Value: fmt.Sprintf("%d", cdpPort)},
+		{Name: portEnv, Value: fmt.Sprintf("%d", cdpPort)},
 	}
 
 	// Desired state passed declaratively: the browser reads these at startup.
-	if len(browser.Spec.Extensions) > 0 {
+	// A camoufox browser takes no extensions (status.message says so).
+	if len(browser.Spec.Extensions) > 0 && !camoufox {
 		if data, err := json.Marshal(browser.Spec.Extensions); err == nil {
 			env = append(env, corev1.EnvVar{Name: "BROWSER_EXTENSIONS", Value: string(data)})
 		}

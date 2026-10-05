@@ -110,6 +110,14 @@ spec:
                     - name
                     type: object
                 type: object
+              engine:
+                description: |-
+                  Engine is the browser engine: chrome or camoufox. Absent means chrome.
+                  It is set at creation by the platform and does not change afterwards.
+                enum:
+                - chrome
+                - camoufox
+                type: string
               env:
                 description: Env is a list of environment variables injected into
                   the browser container.
@@ -233,13 +241,15 @@ spec:
                 description: |-
                   Extensions is a list of Chrome Web Store extension IDs to install at creation time.
                   The launcher downloads and injects them into the profile before Chrome starts.
+                  A camoufox browser takes no extensions: the field is ignored there.
                 items:
                   type: string
                 type: array
               image:
                 description: |-
                   Image overrides the browser container image.
-                  If empty, the operator uses its configured default (DEFAULT_BROWSER_IMAGE env var).
+                  If empty, the operator uses its configured default (DEFAULT_BROWSER_IMAGE,
+                  or DEFAULT_CAMOUFOX_IMAGE for a camoufox browser).
                 type: string
               nodeSelector:
                 additionalProperties:
@@ -342,8 +352,10 @@ spec:
                 type: string
               wsUrl:
                 description: |-
-                  WsURL is the full CDP WebSocket URL:
-                  ws://<name>.<namespace>.svc.cluster.local:9222/devtools/browser/<id>
+                  WsURL is the browser's automation WebSocket URL: for chrome the CDP URL
+                  ws://<name>.<namespace>.svc.cluster.local:9222/devtools/browser/<id>, for
+                  camoufox the Playwright URL
+                  ws://<name>.<namespace>.svc.cluster.local:9222/playwright/default
                 type: string
             type: object
         type: object
@@ -605,10 +617,21 @@ spec:
               browsers:
                 description: |-
                   Browsers is an explicit list of in-namespace Browser CR names to register
-                  with this controller (in addition to any autodiscovered ones).
+                  with this controller (in addition to any autodiscovered ones). A named
+                  Browser of another engine is left out (status.message says so).
                 items:
                   type: string
                 type: array
+              engine:
+                description: |-
+                  Engine is the engine of the browsers this controller drives: chrome or
+                  camoufox. Absent means chrome. It registers only Browsers of its engine
+                  and takes remote browsers only when chrome. It is set at creation by the
+                  platform and does not change afterwards.
+                enum:
+                - chrome
+                - camoufox
+                type: string
               env:
                 description: Env is a list of environment variables injected into
                   the controller container.
@@ -731,7 +754,8 @@ spec:
               externalBrowsers:
                 description: |-
                   ExternalBrowsers are remote/BYO browsers reachable at a user-supplied CDP
-                  websocket endpoint, registered alongside in-cluster Browsers.
+                  websocket endpoint, registered alongside in-cluster Browsers. A camoufox
+                  controller ignores them.
                 items:
                   description: ExternalBrowser is a remote/BYO browser registered
                     by ws endpoint.
@@ -791,7 +815,8 @@ spec:
               image:
                 description: |-
                   Image overrides the controller container image.
-                  If empty, the operator uses its configured default (DEFAULT_CONTROLLER_IMAGE env var).
+                  If empty, the operator uses its configured default (DEFAULT_CONTROLLER_IMAGE,
+                  or DEFAULT_CAMOUFOX_API_IMAGE for a camoufox controller).
                 type: string
               maxPagesPerBrowser:
                 description: |-
