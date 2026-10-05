@@ -368,7 +368,9 @@ func TestControllerDeploymentEngineBlind(t *testing.T) {
 	}
 }
 
-// Autoscaled browsers are Chrome browsers and take the template's extensions.
+// Autoscale makes Chrome browsers with the template's extensions, and only a
+// Chrome member at the page limit triggers it: a Camoufox member at the limit
+// does not (the new browser could not take its sessions).
 func TestAutoscaleIsChrome(t *testing.T) {
 	yes := true
 	limit := int32(1)
@@ -379,13 +381,28 @@ func TestAutoscaleIsChrome(t *testing.T) {
 			AutoscaleBrowserTemplate: &browserv1.AutoscaleBrowserTemplateSpec{Extensions: []string{"ext"}},
 		},
 	}
-	r := newReconciler(t, cr, engineBrowser("f1", "camoufox"))
-	reg := []browserv1.RegisteredBrowser{{Name: "f1", ProfileUID: "f1"}}
-	if err := r.autoscaleBrowsers(context.Background(), cr, reg, map[string]int{"f1": 1}); err != nil {
+	ctx := context.Background()
+	r := newReconciler(t, cr, engineBrowser("c1", ""), engineBrowser("f1", "camoufox"))
+	entries, reg, _, err := r.collectBrowsers(ctx, cr)
+	if err != nil {
 		t.Fatal(err)
 	}
+	key := client.ObjectKey{Namespace: "ns", Name: "api-autoscale-1"}
 	var got browserv1.Browser
-	if err := r.Get(context.Background(), client.ObjectKey{Namespace: "ns", Name: "api-autoscale-1"}, &got); err != nil {
+
+	// Only the Camoufox member is at the limit: nothing is made.
+	if err := r.autoscaleBrowsers(ctx, cr, reg, map[string]int{"f1": 1}, camoufoxMembers(entries)); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Get(ctx, key, &got); !apierrors.IsNotFound(err) {
+		t.Fatalf("a Camoufox member at the limit made %s (err %v)", key.Name, err)
+	}
+
+	// The Chrome member at the limit makes a Chrome browser.
+	if err := r.autoscaleBrowsers(ctx, cr, reg, map[string]int{"c1": 1, "f1": 1}, camoufoxMembers(entries)); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Get(ctx, key, &got); err != nil {
 		t.Fatal(err)
 	}
 	if got.Spec.Engine != "" || !reflect.DeepEqual(got.Spec.Extensions, []string{"ext"}) {

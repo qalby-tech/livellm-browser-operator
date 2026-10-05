@@ -417,9 +417,10 @@ func (r *ControllerReconciler) reconcileControllerStatus(ctx context.Context, ct
 			"Waiting for controller pod to be ready", nil, 0, 0, controllerRequeuePending)
 	}
 
-	_, registered, notes, err := r.collectBrowsers(ctx, ctrlCR)
+	entries, registered, notes, err := r.collectBrowsers(ctx, ctrlCR)
 	if err != nil {
 		logger.Info("failed to collect browsers for status", "error", err)
+		entries = nil
 		registered = make([]browserv1.RegisteredBrowser, 0)
 	}
 	sort.Slice(registered, func(i, j int) bool { return registered[i].ProfileUID < registered[j].ProfileUID })
@@ -435,7 +436,7 @@ func (r *ControllerReconciler) reconcileControllerStatus(ctx context.Context, ct
 	autoscaledCount := 0
 	if ctrlCR.Spec.AutoscaleBrowser != nil && *ctrlCR.Spec.AutoscaleBrowser {
 		autoscaledCount = r.countAutoscaledBrowsers(ctx, ctrlCR)
-		if err := r.autoscaleBrowsers(ctx, ctrlCR, registered, pageCounts); err != nil {
+		if err := r.autoscaleBrowsers(ctx, ctrlCR, registered, pageCounts, camoufoxMembers(entries)); err != nil {
 			logger.Error(err, "autoscale check failed")
 		}
 	}
@@ -519,11 +520,27 @@ func (r *ControllerReconciler) countAutoscaledBrowsers(ctx context.Context, ctrl
 	return count
 }
 
+// camoufoxMembers returns the ids whose registry entry is a Camoufox one
+// ({wsUrl, engine: camoufox}).
+func camoufoxMembers(entries map[string]interface{}) map[string]bool {
+	out := map[string]bool{}
+	for id, e := range entries {
+		if m, ok := e.(map[string]interface{}); ok && m["engine"] == browserv1.EngineCamoufox {
+			out[id] = true
+		}
+	}
+	return out
+}
+
+// autoscaleBrowsers creates a Chrome Browser when a Chrome member (local or
+// remote) is at maxPagesPerBrowser. Camoufox members never trigger it: the
+// new browser could not take their sessions.
 func (r *ControllerReconciler) autoscaleBrowsers(
 	ctx context.Context,
 	ctrlCR *browserv1.Controller,
 	registered []browserv1.RegisteredBrowser,
 	pageCounts map[string]int,
+	camoufox map[string]bool,
 ) error {
 	logger := log.FromContext(ctx)
 
@@ -534,6 +551,9 @@ func (r *ControllerReconciler) autoscaleBrowsers(
 
 	needsScale := false
 	for _, rb := range registered {
+		if camoufox[rb.ProfileUID] {
+			continue
+		}
 		if pageCounts[rb.ProfileUID] >= int(maxPages) {
 			needsScale = true
 			logger.Info("browser at page limit, triggering autoscale",

@@ -180,7 +180,8 @@ own browser's engine:
 
 A Camoufox member needs a controller image that reads the `engine` entry
 (controller 2.6.0 or later); an older one leaves only that member unhealthy.
-Autoscaled browsers (`autoscaleBrowser`) are Chrome browsers.
+Autoscaled browsers (`autoscaleBrowser`) are Chrome browsers, and only a
+Chrome member at `maxPagesPerBrowser` makes one: Camoufox members never do.
 
 The engine can't change after creation: the Browser CRD refuses an update
 that changes `spec.engine` (absent counts as chrome). A camoufox browser's

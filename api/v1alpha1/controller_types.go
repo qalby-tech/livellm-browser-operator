@@ -70,10 +70,11 @@ type ControllerSpec struct {
 	AutoscaleBrowser *bool `json:"autoscaleBrowser,omitempty"`
 
 	// AutoscaleBrowserTemplate specifies the Browser spec used when creating
-	// autoscaled browsers.  If empty, the operator copies the spec from the
-	// first manually-defined Browser CR in the same namespace (matched by
-	// browserSelector).  At a minimum, profileUid is generated automatically.
-	// Autoscaled browsers are Chrome browsers.
+	// autoscaled browsers. If empty, an autoscaled browser gets only a
+	// generated profileUid and reclaimPolicy Delete; everything else takes
+	// the Browser defaults. Autoscaled browsers are Chrome browsers, and only
+	// a Chrome member at maxPagesPerBrowser makes one (Camoufox members never
+	// do).
 	// +optional
 	AutoscaleBrowserTemplate *AutoscaleBrowserTemplateSpec `json:"autoscaleBrowserTemplate,omitempty"`
 
